@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "/home/cryo/freqtrade"
+		},
+		{
+			"path": "/home/cryo/gekko"
+		}
+	],
+	"settings": {}
+}
