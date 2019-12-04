@@ -48,7 +48,7 @@ class MLStrategy(IStrategy):
     stoploss = -0.90
 
     # Optimal ticker interval for the strategy
-    ticker_interval = '5m'
+    ticker_interval = '1m'
 
     # trailing stoploss
     trailing_stop = False
@@ -96,10 +96,10 @@ class MLStrategy(IStrategy):
         df.set_index('date', drop=False)
         # print(df.tail())
         self.to_drop = ['date',
-                        'volume',
+                        # 'volume',
                         # 'close_to_sma',
-                        'high', 'low',
-                        'open', 'close',
+                        # 'high', 'low',
+                        # 'open', 'close',
                         # 'macd',
                         'macdsignal',
                         # 'minus_di',
@@ -112,7 +112,7 @@ class MLStrategy(IStrategy):
         from sklearn.preprocessing import MinMaxScaler
 
         df_filtered = df.drop(self.to_drop, axis=1)
-        self.fr_features = ['minus_di', 'rsi', 'fastd', 'fastk', 'sar', 'sma', 'TRANGE']
+        self.fr_features = ['high', 'low', 'open', 'close', 'volume', 'minus_di', 'rsi', 'fastd', 'fastk', 'sar', 'sma', 'TRANGE']
         self.neg_features = ['macd']
         # df[['x','z']] = mms.fit_transform(df[['x','z']])
         self.fr_scaler = MinMaxScaler(feature_range=(0, 1))
@@ -144,31 +144,31 @@ class MLStrategy(IStrategy):
         # sys.exit(0)
 
         # from sklearn.ensemble import GradientBoostingRegressor
-        # model = GradientBoostingRegressor(alpha=0.85,
+        # model = GradientBoostingRegressor(alpha=0.9,
         #                                   learning_rate=0.9,
         #                                   loss="huber",
         #                                   max_depth=8,
         #                                 #   max_features=0.8500000000000001,
         #                                 #   min_samples_leaf=1,
         #                                 #   min_samples_split=14,
-        #                                   n_estimators=10,
+        #                                   n_estimators=20,
         #                                 #   subsample=0.55
         #                                   )
-        import xgboost as xgb
-        model = xgb.XGBRegressor(alpha=0.85,
-                                 learning_rate=0.9,
-                                 loss="huber",
-                                 max_depth=8,
-                            #   max_features=0.8500000000000001,
-                            #   min_samples_leaf=1,
-                            #   min_samples_split=14,
-                                 n_estimators=10,
-                            #   subsample=0.55
-                                 )
+        # import xgboost as xgb
+        # model = xgb.XGBRegressor(alpha=0.85,
+        #                          learning_rate=0.9,
+        #                          loss="huber",
+        #                          max_depth=8,
+        #                     #   max_features=0.8500000000000001,
+        #                     #   min_samples_leaf=1,
+        #                     #   min_samples_split=14,
+        #                          n_estimators=10,
+        #                     #   subsample=0.55
+        #                          )
 
         
-        # from sklearn.neighbors import KNeighborsRegressor
-        # model = KNeighborsRegressor(n_neighbors=4, p=1, weights="distance")
+        from sklearn.neighbors import KNeighborsRegressor
+        model = KNeighborsRegressor(n_neighbors=3, p=2, weights="distance", n_jobs=4)
         model.fit(training_features, training_target)
         response = 'Model fitted using dataframe of length = '\
                     + str(len(training_features))\
