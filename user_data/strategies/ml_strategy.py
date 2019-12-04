@@ -77,6 +77,13 @@ class MLStrategy(IStrategy):
         super().__init__(config)
         self.is_trained = False
         # if not self.is_trained:
+        if not hasattr(self, 'dp'):
+            from freqtrade.resolvers import ExchangeResolver
+            from freqtrade.data.dataprovider import DataProvider
+
+            exchange = ExchangeResolver(self.config['exchange']['name'], self.config, False).exchange
+            dataprovider = DataProvider(self.config, exchange)
+            self.dp = dataprovider
         self.train()
 
     def train(self):
