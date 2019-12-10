@@ -287,6 +287,7 @@ class MLStrategy(IStrategy):
         # sentiments = pd.np.array(dataframe.sentiment).reshape(-1, 1)
         dataframe = dataframe.fillna(method='ffill')
         dataframe = dataframe.fillna(method='bfill')
+        dataframe = dataframe.reset_index(drop=True)
         return dataframe
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -397,5 +398,5 @@ class MLStrategy(IStrategy):
             #     dataframe['fisher_rsi'] > 0.3
             # ),
             (dataframe['future_perc_change'] < dataframe['perc_change']),
-            'sell'] = 0
+            'sell'] = 1
         return dataframe
