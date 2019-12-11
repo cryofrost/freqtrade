@@ -63,7 +63,7 @@ class MLStrategy(IStrategy):
 
     # Optimal stoploss designed for the strategy
     # This attribute will be overridden if the config file contains "stoploss"
-    stoploss = -0.90
+    stoploss = -0.085
 
     # Optimal ticker interval for the strategy
     ticker_interval = '1m'
@@ -124,7 +124,7 @@ class MLStrategy(IStrategy):
         df.set_index('date', drop=False)
         # print(df.tail())
         self.to_drop = ['date',
-                        # 'volume',
+                        'volume',
                         # 'close_to_sma',
                         # 'high', 'low',
                         # 'open', 'close',
@@ -140,7 +140,8 @@ class MLStrategy(IStrategy):
 
         df_filtered = df.drop(self.to_drop, axis=1)
         self.fr_features = ['high', 'low', 'open', 'close',
-                            'volume', 'minus_di', 'rsi', 'fastd', 'fastk',
+                            # 'volume',
+                            'minus_di', 'rsi', 'fastd', 'fastk',
                             'sar', 'sma', 'TRANGE']
         self.neg_features = ['macd']
         # df[['x','z']] = mms.fit_transform(df[['x','z']])
@@ -362,6 +363,7 @@ class MLStrategy(IStrategy):
         :param dataframe: DataFrame
         :return: DataFrame with buy column
         """
+        delta = 0.1
         dataframe.loc[
             # Prod
             # (
@@ -375,7 +377,11 @@ class MLStrategy(IStrategy):
             #     (dataframe['fisher_rsi_norma'] < 38.900000000000006) &
             #     # (dataframe['future_close'] > dataframe['close'])
             # ),
-            (dataframe['future_perc_change'] > dataframe['perc_change']),
+            # (dataframe['future_perc_change'] > dataframe['perc_change']),
+            (
+                (dataframe['future_perc_change'] - dataframe['perc_change'] >= delta) &
+                (dataframe['future_perc_change'] > 0)
+            ),
             'buy'] = 1
 
         return dataframe
