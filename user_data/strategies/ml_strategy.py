@@ -124,7 +124,7 @@ class MLStrategy(IStrategy):
         df.set_index('date', drop=False)
         # print(df.tail())
         self.to_drop = ['date',
-                        'volume',
+                        # 'volume',
                         # 'close_to_sma',
                         # 'high', 'low',
                         # 'open', 'close',
@@ -140,7 +140,7 @@ class MLStrategy(IStrategy):
 
         df_filtered = df.drop(self.to_drop, axis=1)
         self.fr_features = ['high', 'low', 'open', 'close',
-                            # 'volume',
+                            'volume',
                             'minus_di', 'rsi', 'fastd', 'fastk',
                             'sar', 'sma', 'TRANGE']
         self.neg_features = ['macd']
@@ -379,8 +379,8 @@ class MLStrategy(IStrategy):
             # ),
             # (dataframe['future_perc_change'] > dataframe['perc_change']),
             (
-                (dataframe['future_perc_change'] - dataframe['perc_change'] >= delta) &
-                (dataframe['future_perc_change'] > 0)
+                # (dataframe['future_perc_change'] - dataframe['perc_change'] >= delta) &
+                (dataframe['future_perc_change'] > delta * 2)
             ),
             'buy'] = 1
 
