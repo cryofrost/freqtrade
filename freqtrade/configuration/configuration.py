@@ -9,8 +9,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from freqtrade import OperationalException, constants
 from freqtrade.configuration.check_exchange import check_exchange
-from freqtrade.configuration.config_validation import (validate_config_consistency,
-                                                       validate_config_schema)
 from freqtrade.configuration.deprecated_settings import process_temporary_deprecated_settings
 from freqtrade.configuration.directory_operations import (create_datadir,
                                                           create_userdata_dir)
@@ -81,9 +79,8 @@ class Configuration:
         if 'ask_strategy' not in config:
             config['ask_strategy'] = {}
 
-        # validate configuration before returning
-        logger.info('Validating configuration ...')
-        validate_config_schema(config)
+        if 'pairlists' not in config:
+            config['pairlists'] = []
 
         return config
 
@@ -114,8 +111,6 @@ class Configuration:
         self._resolve_pairs_list(config)
 
         process_temporary_deprecated_settings(config)
-
-        validate_config_consistency(config)
 
         return config
 
@@ -304,6 +299,21 @@ class Configuration:
 
         self._args_to_config(config, argname='hyperopt_loss',
                              logstring='Using Hyperopt loss class name: {}')
+
+        self._args_to_config(config, argname='hyperopt_show_index',
+                             logstring='Parameter -n/--index detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_best',
+                             logstring='Parameter --best detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_profitable',
+                             logstring='Parameter --profitable detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_no_details',
+                             logstring='Parameter --no-details detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_show_no_header',
+                             logstring='Parameter --no-header detected: {}')
 
     def _process_plot_options(self, config: Dict[str, Any]) -> None:
 

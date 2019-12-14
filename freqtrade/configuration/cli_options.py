@@ -18,6 +18,18 @@ def check_int_positive(value: str) -> int:
     return uint
 
 
+def check_int_nonzero(value: str) -> int:
+    try:
+        uint = int(value)
+        if uint == 0:
+            raise ValueError
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{value} is invalid for this parameter, should be a non-zero integer value"
+        )
+    return uint
+
+
 class Arg:
     # Optional CLI arguments
     def __init__(self, *args, **kwargs):
@@ -36,7 +48,8 @@ AVAILABLE_CLI_OPTIONS = {
     ),
     "logfile": Arg(
         '--logfile',
-        help='Log to the file specified.',
+        help="Log to the file specified. Special values are: 'syslog', 'journald'. "
+             "See the documentation for more details.",
         metavar='FILE',
     ),
     "version": Arg(
@@ -61,6 +74,11 @@ AVAILABLE_CLI_OPTIONS = {
         '--userdir', '--user-data-dir',
         help='Path to userdata directory.',
         metavar='PATH',
+    ),
+    "reset": Arg(
+        '--reset',
+        help='Reset sample files to their original state.',
+        action='store_true',
     ),
     # Main options
     "strategy": Arg(
@@ -178,11 +196,10 @@ AVAILABLE_CLI_OPTIONS = {
     ),
     "spaces": Arg(
         '--spaces',
-        help='Specify which parameters to hyperopt. Space-separated list. '
-        'Default: `%(default)s`.',
-        choices=['all', 'buy', 'sell', 'roi', 'stoploss'],
+        help='Specify which parameters to hyperopt. Space-separated list.',
+        choices=['all', 'buy', 'sell', 'roi', 'stoploss', 'trailing', 'default'],
         nargs='+',
-        default='all',
+        default='default',
     ),
     "print_all": Arg(
         '--print-all',
@@ -334,6 +351,14 @@ AVAILABLE_CLI_OPTIONS = {
         help='Clean all existing data for the selected exchange/pairs/timeframes.',
         action='store_true',
     ),
+    # Templating options
+    "template": Arg(
+        '--template',
+        help='Use a template which is either `minimal` or '
+        '`full` (containing multiple sample indicators). Default: `%(default)s`.',
+        choices=['full', 'minimal'],
+        default='full',
+    ),
     # Plot dataframe
     "indicators1": Arg(
         '--indicators1',
@@ -363,5 +388,32 @@ AVAILABLE_CLI_OPTIONS = {
         'Default: %(default)s',
         choices=["DB", "file"],
         default="file",
+    ),
+    # hyperopt-list, hyperopt-show
+    "hyperopt_list_profitable": Arg(
+        '--profitable',
+        help='Select only profitable epochs.',
+        action='store_true',
+    ),
+    "hyperopt_list_best": Arg(
+        '--best',
+        help='Select only best epochs.',
+        action='store_true',
+    ),
+    "hyperopt_list_no_details": Arg(
+        '--no-details',
+        help='Do not print best epoch details.',
+        action='store_true',
+    ),
+    "hyperopt_show_index": Arg(
+        '-n', '--index',
+        help='Specify the index of the epoch to print details for.',
+        type=check_int_nonzero,
+        metavar='INT',
+    ),
+    "hyperopt_show_no_header": Arg(
+        '--no-header',
+        help='Do not print epoch details header.',
+        action='store_true',
     ),
 }

@@ -8,8 +8,12 @@ from freqtrade import OperationalException
 from freqtrade.state import RunMode
 from freqtrade.utils import (setup_utils_configuration, start_create_userdir,
                              start_download_data, start_list_exchanges,
-                             start_list_markets, start_list_timeframes)
-from tests.conftest import get_args, log_has, patch_exchange
+                             start_list_markets, start_list_timeframes,
+                             start_new_hyperopt, start_new_strategy,
+                             start_test_pairlist, start_trading,
+                             start_hyperopt_list, start_hyperopt_show)
+from tests.conftest import (get_args, log_has, log_has_re, patch_exchange,
+                            patched_configuration_load_config_file)
 
 
 def test_setup_utils_configuration():
@@ -22,6 +26,29 @@ def test_setup_utils_configuration():
     assert config['dry_run'] is True
     assert config['exchange']['key'] == ''
     assert config['exchange']['secret'] == ''
+
+
+def test_start_trading_fail(mocker):
+
+    mocker.patch("freqtrade.worker.Worker.run", MagicMock(side_effect=OperationalException))
+
+    mocker.patch("freqtrade.worker.Worker.__init__", MagicMock(return_value=None))
+
+    exitmock = mocker.patch("freqtrade.worker.Worker.exit", MagicMock())
+    args = [
+        'trade',
+        '-c', 'config.json.example'
+    ]
+    with pytest.raises(OperationalException):
+        start_trading(get_args(args))
+    assert exitmock.call_count == 1
+
+    exitmock.reset_mock()
+
+    mocker.patch("freqtrade.worker.Worker.__init__", MagicMock(side_effect=OperationalException))
+    with pytest.raises(OperationalException):
+        start_trading(get_args(args))
+    assert exitmock.call_count == 0
 
 
 def test_list_exchanges(capsys):
@@ -418,6 +445,7 @@ def test_create_datadir_failed(caplog):
 
 def test_create_datadir(caplog, mocker):
     cud = mocker.patch("freqtrade.utils.create_userdata_dir", MagicMock())
+    csf = mocker.patch("freqtrade.utils.copy_sample_files", MagicMock())
     args = [
         "create-userdir",
         "--userdir",
@@ -426,7 +454,80 @@ def test_create_datadir(caplog, mocker):
     start_create_userdir(get_args(args))
 
     assert cud.call_count == 1
+    assert csf.call_count == 1
     assert len(caplog.record_tuples) == 0
+
+
+def test_start_new_strategy(mocker, caplog):
+    wt_mock = mocker.patch.object(Path, "write_text", MagicMock())
+    mocker.patch.object(Path, "exists", MagicMock(return_value=False))
+
+    args = [
+        "new-strategy",
+        "--strategy",
+        "CoolNewStrategy"
+    ]
+    start_new_strategy(get_args(args))
+
+    assert wt_mock.call_count == 1
+    assert "CoolNewStrategy" in wt_mock.call_args_list[0][0][0]
+    assert log_has_re("Writing strategy to .*", caplog)
+
+
+def test_start_new_strategy_DefaultStrat(mocker, caplog):
+    args = [
+        "new-strategy",
+        "--strategy",
+        "DefaultStrategy"
+    ]
+    with pytest.raises(OperationalException,
+                       match=r"DefaultStrategy is not allowed as name\."):
+        start_new_strategy(get_args(args))
+
+
+def test_start_new_strategy_no_arg(mocker, caplog):
+    args = [
+        "new-strategy",
+    ]
+    with pytest.raises(OperationalException,
+                       match="`new-strategy` requires --strategy to be set."):
+        start_new_strategy(get_args(args))
+
+
+def test_start_new_hyperopt(mocker, caplog):
+    wt_mock = mocker.patch.object(Path, "write_text", MagicMock())
+    mocker.patch.object(Path, "exists", MagicMock(return_value=False))
+
+    args = [
+        "new-hyperopt",
+        "--hyperopt",
+        "CoolNewhyperopt"
+    ]
+    start_new_hyperopt(get_args(args))
+
+    assert wt_mock.call_count == 1
+    assert "CoolNewhyperopt" in wt_mock.call_args_list[0][0][0]
+    assert log_has_re("Writing hyperopt to .*", caplog)
+
+
+def test_start_new_hyperopt_DefaultHyperopt(mocker, caplog):
+    args = [
+        "new-hyperopt",
+        "--hyperopt",
+        "DefaultHyperopt"
+    ]
+    with pytest.raises(OperationalException,
+                       match=r"DefaultHyperopt is not allowed as name\."):
+        start_new_hyperopt(get_args(args))
+
+
+def test_start_new_hyperopt_no_arg(mocker, caplog):
+    args = [
+        "new-hyperopt",
+    ]
+    with pytest.raises(OperationalException,
+                       match="`new-hyperopt` requires --hyperopt to be set."):
+        start_new_hyperopt(get_args(args))
 
 
 def test_download_data_keyboardInterrupt(mocker, caplog, markets):
@@ -474,7 +575,7 @@ def test_download_data_no_exchange(mocker, caplog):
     )
     args = [
         "download-data",
-        ]
+    ]
     pargs = get_args(args)
     pargs['config'] = None
     with pytest.raises(OperationalException,
@@ -524,3 +625,164 @@ def test_download_data_trades(mocker, caplog):
     assert dl_mock.call_args[1]['timerange'].starttype == "date"
     assert dl_mock.call_count == 1
     assert convert_mock.call_count == 1
+
+
+def test_start_test_pairlist(mocker, caplog, markets, tickers, default_conf, capsys):
+    mocker.patch.multiple('freqtrade.exchange.Exchange',
+                          markets=PropertyMock(return_value=markets),
+                          exchange_has=MagicMock(return_value=True),
+                          get_tickers=tickers
+                          )
+
+    default_conf['pairlists'] = [
+        {
+            "method": "VolumePairList",
+            "number_assets": 5,
+            "sort_key": "quoteVolume",
+        },
+        {"method": "PrecisionFilter"},
+        {"method": "PriceFilter", "low_price_ratio": 0.02},
+    ]
+
+    patched_configuration_load_config_file(mocker, default_conf)
+    args = [
+        'test-pairlist',
+        '-c', 'config.json.example'
+    ]
+
+    start_test_pairlist(get_args(args))
+
+    assert log_has_re(r"^Using resolved pairlist VolumePairList.*", caplog)
+    assert log_has_re(r"^Using resolved pairlist PrecisionFilter.*", caplog)
+    assert log_has_re(r"^Using resolved pairlist PriceFilter.*", caplog)
+    captured = capsys.readouterr()
+    assert re.match(r"Pairs for .*", captured.out)
+    assert re.match("['ETH/BTC', 'TKN/BTC', 'BLK/BTC', 'LTC/BTC', 'XRP/BTC']", captured.out)
+
+
+def test_hyperopt_list(mocker, capsys, hyperopt_results):
+    mocker.patch(
+        'freqtrade.optimize.hyperopt.Hyperopt.load_previous_results',
+        MagicMock(return_value=hyperopt_results)
+    )
+
+    args = [
+        "hyperopt-list",
+        "--no-details"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_list(pargs)
+    captured = capsys.readouterr()
+    assert all(x in captured.out
+               for x in [" 1/12", " 2/12", " 3/12", " 4/12", " 5/12",
+                         " 6/12", " 7/12", " 8/12", " 9/12", " 10/12",
+                         " 11/12", " 12/12"])
+    args = [
+        "hyperopt-list",
+        "--best",
+        "--no-details"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_list(pargs)
+    captured = capsys.readouterr()
+    assert all(x in captured.out
+               for x in [" 1/12", " 5/12", " 10/12"])
+    assert all(x not in captured.out
+               for x in [" 2/12", " 3/12", " 4/12", " 6/12", " 7/12", " 8/12", " 9/12",
+                         " 11/12", " 12/12"])
+    args = [
+        "hyperopt-list",
+        "--profitable",
+        "--no-details"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_list(pargs)
+    captured = capsys.readouterr()
+    assert all(x in captured.out
+               for x in [" 2/12", " 10/12"])
+    assert all(x not in captured.out
+               for x in [" 1/12", " 3/12", " 4/12", " 5/12", " 6/12", " 7/12", " 8/12", " 9/12",
+                         " 11/12", " 12/12"])
+
+
+def test_hyperopt_show(mocker, capsys, hyperopt_results):
+    mocker.patch(
+        'freqtrade.optimize.hyperopt.Hyperopt.load_previous_results',
+        MagicMock(return_value=hyperopt_results)
+    )
+
+    args = [
+        "hyperopt-show",
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_show(pargs)
+    captured = capsys.readouterr()
+    assert " 12/12" in captured.out
+
+    args = [
+        "hyperopt-show",
+        "--best"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_show(pargs)
+    captured = capsys.readouterr()
+    assert " 10/12" in captured.out
+
+    args = [
+        "hyperopt-show",
+        "-n", "1"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_show(pargs)
+    captured = capsys.readouterr()
+    assert " 1/12" in captured.out
+
+    args = [
+        "hyperopt-show",
+        "--best",
+        "-n", "2"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_show(pargs)
+    captured = capsys.readouterr()
+    assert " 5/12" in captured.out
+
+    args = [
+        "hyperopt-show",
+        "--best",
+        "-n", "-1"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    start_hyperopt_show(pargs)
+    captured = capsys.readouterr()
+    assert " 10/12" in captured.out
+
+    args = [
+        "hyperopt-show",
+        "--best",
+        "-n", "-4"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    with pytest.raises(OperationalException,
+                       match="The index of the epoch to show should be greater than -4."):
+        start_hyperopt_show(pargs)
+
+    args = [
+        "hyperopt-show",
+        "--best",
+        "-n", "4"
+    ]
+    pargs = get_args(args)
+    pargs['config'] = None
+    with pytest.raises(OperationalException,
+                       match="The index of the epoch to show should be less than 4."):
+        start_hyperopt_show(pargs)

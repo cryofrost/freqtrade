@@ -61,10 +61,15 @@ def validate_config_consistency(conf: Dict[str, Any]) -> None:
     :param conf: Config in JSON format
     :return: Returns None if everything is ok, otherwise throw an OperationalException
     """
+
     # validating trailing stoploss
     _validate_trailing_stoploss(conf)
     _validate_edge(conf)
     _validate_whitelist(conf)
+
+    # validate configuration before returning
+    logger.info('Validating configuration ...')
+    validate_config_schema(conf)
 
 
 def _validate_trailing_stoploss(conf: Dict[str, Any]) -> None:
@@ -122,6 +127,19 @@ def _validate_whitelist(conf: Dict[str, Any]) -> None:
                                               RunMode.UTIL_NO_EXCHANGE, RunMode.UTIL_EXCHANGE]:
         return
 
-    if (conf.get('pairlist', {}).get('method', 'StaticPairList') == 'StaticPairList'
-       and not conf.get('exchange', {}).get('pair_whitelist')):
-        raise OperationalException("StaticPairList requires pair_whitelist to be set.")
+    for pl in conf.get('pairlists', [{'method': 'StaticPairList'}]):
+        if (pl.get('method') == 'StaticPairList'
+                and not conf.get('exchange', {}).get('pair_whitelist')):
+            raise OperationalException("StaticPairList requires pair_whitelist to be set.")
+
+        if pl.get('method') == 'StaticPairList':
+            stake = conf['stake_currency']
+            invalid_pairs = []
+            for pair in conf['exchange'].get('pair_whitelist'):
+                if not pair.endswith(f'/{stake}'):
+                    invalid_pairs.append(pair)
+
+            if invalid_pairs:
+                raise OperationalException(
+                    f"Stake-currency '{stake}' not compatible with pair-whitelist. "
+                    f"Please remove the following pairs: {invalid_pairs}")

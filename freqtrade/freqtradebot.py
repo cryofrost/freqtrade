@@ -20,9 +20,9 @@ from freqtrade.data.dataprovider import DataProvider
 from freqtrade.edge import Edge
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_next_date
 from freqtrade.persistence import Trade
-from freqtrade.resolvers import (ExchangeResolver, PairListResolver,
-                                 StrategyResolver)
+from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.rpc import RPCManager, RPCMessageType
+from freqtrade.pairlist.pairlistmanager import PairListManager
 from freqtrade.state import State
 from freqtrade.strategy.interface import IStrategy, SellType
 from freqtrade.wallets import Wallets
@@ -70,8 +70,7 @@ class FreqtradeBot:
         # Attach Wallets to Strategy baseclass
         IStrategy.wallets = self.wallets
 
-        pairlistname = self.config.get('pairlist', {}).get('method', 'StaticPairList')
-        self.pairlists = PairListResolver(pairlistname, self, self.config).pairlist
+        self.pairlists = PairListManager(self.exchange, self.config)
 
         # Initializing Edge only if enabled
         self.edge = Edge(self.config, self.exchange, self.strategy) if \
@@ -267,7 +266,11 @@ class FreqtradeBot:
             amount_reserve_percent += self.strategy.stoploss
         # it should not be more than 50%
         amount_reserve_percent = max(amount_reserve_percent, 0.5)
-        return min(min_stake_amounts) / amount_reserve_percent
+
+        # The value returned should satisfy both limits: for amount (base currency) and
+        # for cost (quote, stake currency), so max() is used here.
+        # See also #2575 at github.
+        return max(min_stake_amounts) / amount_reserve_percent
 
     def create_trades(self) -> bool:
         """
@@ -788,7 +791,7 @@ class FreqtradeBot:
                 continue
 
             # Check if trade is still actually open
-            if float(order['remaining']) == 0.0:
+            if float(order.get('remaining', 0.0)) == 0.0:
                 self.wallets.update()
                 continue
 
@@ -814,7 +817,8 @@ class FreqtradeBot:
         })
 
     def handle_timedout_limit_buy(self, trade: Trade, order: Dict) -> bool:
-        """Buy timeout - cancel order
+        """
+        Buy timeout - cancel order
         :return: True if order was fully cancelled
         """
         reason = "cancelled due to timeout"
@@ -825,18 +829,22 @@ class FreqtradeBot:
             corder = order
             reason = "canceled on Exchange"
 
-        if corder['remaining'] == corder['amount']:
+        if corder.get('remaining', order['remaining']) == order['amount']:
             # if trade is not partially completed, just delete the trade
             self.handle_buy_order_full_cancel(trade, reason)
             return True
 
         # if trade is partially complete, edit the stake details for the trade
         # and close the order
-        trade.amount = corder['amount'] - corder['remaining']
+        # cancel_order may not contain the full order dict, so we need to fallback
+        # to the order dict aquired before cancelling.
+        # we need to fall back to the values from order if corder does not contain these keys.
+        trade.amount = order['amount'] - corder.get('remaining', order['remaining'])
         trade.stake_amount = trade.amount * trade.open_rate
         # verify if fees were taken from amount to avoid problems during selling
         try:
-            new_amount = self.get_real_amount(trade, corder, trade.amount)
+            new_amount = self.get_real_amount(trade, corder if 'fee' in corder else order,
+                                              trade.amount)
             if not isclose(order['amount'], new_amount, abs_tol=constants.MATH_CLOSE_PREC):
                 trade.amount = new_amount
                 # Fee was applied, so set to 0
@@ -954,7 +962,9 @@ class FreqtradeBot:
             'current_rate': current_rate,
             'profit_amount': profit_trade,
             'profit_percent': profit_percent,
-            'sell_reason': trade.sell_reason
+            'sell_reason': trade.sell_reason,
+            'open_date': trade.open_date,
+            'close_date': trade.close_date or datetime.utcnow()
         }
 
         # For regular case, when the configuration exists

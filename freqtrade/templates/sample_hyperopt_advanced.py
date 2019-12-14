@@ -1,17 +1,20 @@
 # pragma pylint: disable=missing-docstring, invalid-name, pointless-string-statement
 
+# --- Do not remove these libs ---
 from functools import reduce
-from math import exp
 from typing import Any, Callable, Dict, List
-from datetime import datetime
 
-import numpy as np# noqa F401
-import talib.abstract as ta
+import numpy as np  # noqa
+import pandas as pd  # noqa
 from pandas import DataFrame
-from skopt.space import Categorical, Dimension, Integer, Real
+from skopt.space import Categorical, Dimension, Integer, Real  # noqa
 
-import freqtrade.vendor.qtpylib.indicators as qtpylib
 from freqtrade.optimize.hyperopt_interface import IHyperOpt
+
+# --------------------------------
+# Add your lib to import here
+import talib.abstract as ta  # noqa
+import freqtrade.vendor.qtpylib.indicators as qtpylib
 
 
 class AdvancedSampleHyperOpt(IHyperOpt):
@@ -228,6 +231,27 @@ class AdvancedSampleHyperOpt(IHyperOpt):
         """
         return [
             Real(-0.5, -0.02, name='stoploss'),
+        ]
+
+    @staticmethod
+    def trailing_space() -> List[Dimension]:
+        """
+        Create a trailing stoploss space.
+
+        You may override it in your custom Hyperopt class.
+        """
+        return [
+            # It was decided to always set trailing_stop is to True if the 'trailing' hyperspace
+            # is used. Otherwise hyperopt will vary other parameters that won't have effect if
+            # trailing_stop is set False.
+            # This parameter is included into the hyperspace dimensions rather than assigning
+            # it explicitly in the code in order to have it printed in the results along with
+            # other 'trailing' hyperspace parameters.
+            Categorical([True], name='trailing_stop'),
+
+            Real(0.02, 0.35, name='trailing_stop_positive'),
+            Real(0.01, 0.1, name='trailing_stop_positive_offset'),
+            Categorical([True, False], name='trailing_only_offset_is_reached'),
         ]
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:

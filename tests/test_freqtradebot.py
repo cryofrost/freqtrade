@@ -5,7 +5,7 @@ import logging
 import time
 from copy import deepcopy
 from math import isclose
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import ANY, MagicMock, PropertyMock
 
 import arrow
 import pytest
@@ -299,7 +299,7 @@ def test_total_open_trades_stakes(mocker, default_conf, ticker,
                                   limit_buy_order, fee) -> None:
     patch_RPCManager(mocker)
     patch_exchange(mocker)
-    default_conf['stake_amount'] = 0.0000098751
+    default_conf['stake_amount'] = 0.00098751
     default_conf['max_open_trades'] = 2
     mocker.patch.multiple(
         'freqtrade.exchange.Exchange',
@@ -313,7 +313,7 @@ def test_total_open_trades_stakes(mocker, default_conf, ticker,
     trade = Trade.query.first()
 
     assert trade is not None
-    assert trade.stake_amount == 0.0000098751
+    assert trade.stake_amount == 0.00098751
     assert trade.is_open
     assert trade.open_date is not None
 
@@ -321,11 +321,11 @@ def test_total_open_trades_stakes(mocker, default_conf, ticker,
     trade = Trade.query.order_by(Trade.id.desc()).first()
 
     assert trade is not None
-    assert trade.stake_amount == 0.0000098751
+    assert trade.stake_amount == 0.00098751
     assert trade.is_open
     assert trade.open_date is not None
 
-    assert Trade.total_open_trades_stakes() == 1.97502e-05
+    assert Trade.total_open_trades_stakes() == 1.97502e-03
 
 
 def test_get_min_pair_stake_amount(mocker, default_conf) -> None:
@@ -334,6 +334,7 @@ def test_get_min_pair_stake_amount(mocker, default_conf) -> None:
     freqtrade = FreqtradeBot(default_conf)
     freqtrade.strategy.stoploss = -0.05
     markets = {'ETH/BTC': {'symbol': 'ETH/BTC'}}
+
     # no pair found
     mocker.patch(
         'freqtrade.exchange.Exchange.markets',
@@ -425,7 +426,7 @@ def test_get_min_pair_stake_amount(mocker, default_conf) -> None:
         PropertyMock(return_value=markets)
     )
     result = freqtrade._get_min_pair_stake_amount('ETH/BTC', 2)
-    assert result == min(2, 2 * 2) / 0.9
+    assert result == max(2, 2 * 2) / 0.9
 
     # min amount and cost are set (amount is minial)
     markets["ETH/BTC"]["limits"] = {
@@ -437,7 +438,27 @@ def test_get_min_pair_stake_amount(mocker, default_conf) -> None:
         PropertyMock(return_value=markets)
     )
     result = freqtrade._get_min_pair_stake_amount('ETH/BTC', 2)
-    assert result == min(8, 2 * 2) / 0.9
+    assert result == max(8, 2 * 2) / 0.9
+
+
+def test_get_min_pair_stake_amount_real_data(mocker, default_conf) -> None:
+    patch_RPCManager(mocker)
+    patch_exchange(mocker)
+    freqtrade = FreqtradeBot(default_conf)
+    freqtrade.strategy.stoploss = -0.05
+    markets = {'ETH/BTC': {'symbol': 'ETH/BTC'}}
+
+    # Real Binance data
+    markets["ETH/BTC"]["limits"] = {
+        'cost': {'min': 0.0001},
+        'amount': {'min': 0.001}
+    }
+    mocker.patch(
+        'freqtrade.exchange.Exchange.markets',
+        PropertyMock(return_value=markets)
+    )
+    result = freqtrade._get_min_pair_stake_amount('ETH/BTC', 0.020405)
+    assert round(result, 8) == round(max(0.0001, 0.001 * 0.020405) / 0.9, 8)
 
 
 def test_create_trades(default_conf, ticker, limit_buy_order, fee, mocker) -> None:
@@ -522,8 +543,9 @@ def test_create_trades_too_small_stake_amount(default_conf, ticker, limit_buy_or
         get_fee=fee,
     )
 
-    default_conf['stake_amount'] = 0.000000005
     freqtrade = FreqtradeBot(default_conf)
+    freqtrade.config['stake_amount'] = 0.000000005
+
     patch_get_signal(freqtrade)
 
     assert not freqtrade.create_trades()
@@ -764,7 +786,10 @@ def test_process_trade_no_whitelist_pair(default_conf, ticker, limit_buy_order,
     )
     freqtrade = FreqtradeBot(default_conf)
     patch_get_signal(freqtrade)
-    pair = 'NOCLUE/BTC'
+    pair = 'BLK/BTC'
+    # Ensure the pair is not in the whitelist!
+    assert pair not in default_conf['exchange']['pair_whitelist']
+
     # create open trade not in whitelist
     Trade.session.add(Trade(
         pair=pair,
@@ -1804,7 +1829,7 @@ def test_close_trade(default_conf, ticker, limit_buy_order, limit_sell_order,
 def test_check_handle_timedout_buy(default_conf, ticker, limit_buy_order_old, open_trade,
                                    fee, mocker) -> None:
     rpc_mock = patch_RPCManager(mocker)
-    cancel_order_mock = MagicMock()
+    cancel_order_mock = MagicMock(return_value=limit_buy_order_old)
     patch_exchange(mocker)
     mocker.patch.multiple(
         'freqtrade.exchange.Exchange',
@@ -2089,6 +2114,29 @@ def test_handle_timedout_limit_buy(mocker, default_conf, limit_buy_order) -> Non
     assert cancel_order_mock.call_count == 1
 
 
+def test_handle_timedout_limit_buy_corder_empty(mocker, default_conf, limit_buy_order) -> None:
+    patch_RPCManager(mocker)
+    patch_exchange(mocker)
+    cancel_order_mock = MagicMock(return_value={})
+    mocker.patch.multiple(
+        'freqtrade.exchange.Exchange',
+        cancel_order=cancel_order_mock
+    )
+
+    freqtrade = FreqtradeBot(default_conf)
+
+    Trade.session = MagicMock()
+    trade = MagicMock()
+    limit_buy_order['remaining'] = limit_buy_order['amount']
+    assert freqtrade.handle_timedout_limit_buy(trade, limit_buy_order)
+    assert cancel_order_mock.call_count == 1
+
+    cancel_order_mock.reset_mock()
+    limit_buy_order['amount'] = 2
+    assert not freqtrade.handle_timedout_limit_buy(trade, limit_buy_order)
+    assert cancel_order_mock.call_count == 1
+
+
 def test_handle_timedout_limit_sell(mocker, default_conf) -> None:
     patch_RPCManager(mocker)
     patch_exchange(mocker)
@@ -2154,7 +2202,9 @@ def test_execute_sell_up(default_conf, ticker, fee, ticker_sell_up, mocker) -> N
         'profit_percent': 0.0611052,
         'stake_currency': 'BTC',
         'fiat_currency': 'USD',
-        'sell_reason': SellType.ROI.value
+        'sell_reason': SellType.ROI.value,
+        'open_date': ANY,
+        'close_date': ANY,
     } == last_msg
 
 
@@ -2201,7 +2251,9 @@ def test_execute_sell_down(default_conf, ticker, fee, ticker_sell_down, mocker) 
         'profit_percent': -0.05478342,
         'stake_currency': 'BTC',
         'fiat_currency': 'USD',
-        'sell_reason': SellType.STOP_LOSS.value
+        'sell_reason': SellType.STOP_LOSS.value,
+        'open_date': ANY,
+        'close_date': ANY,
     } == last_msg
 
 
@@ -2255,7 +2307,9 @@ def test_execute_sell_down_stoploss_on_exchange_dry_run(default_conf, ticker, fe
         'profit_percent': -0.01493766,
         'stake_currency': 'BTC',
         'fiat_currency': 'USD',
-        'sell_reason': SellType.STOP_LOSS.value
+        'sell_reason': SellType.STOP_LOSS.value,
+        'open_date': ANY,
+        'close_date': ANY,
 
     } == last_msg
 
@@ -2452,7 +2506,9 @@ def test_execute_sell_market_order(default_conf, ticker, fee,
         'profit_percent': 0.0611052,
         'stake_currency': 'BTC',
         'fiat_currency': 'USD',
-        'sell_reason': SellType.ROI.value
+        'sell_reason': SellType.ROI.value,
+        'open_date': ANY,
+        'close_date': ANY,
 
     } == last_msg
 

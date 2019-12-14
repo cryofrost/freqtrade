@@ -80,6 +80,29 @@ class RPC:
     def send_msg(self, msg: Dict[str, str]) -> None:
         """ Sends a message to all registered rpc modules """
 
+    def _rpc_show_config(self) -> Dict[str, Any]:
+        """
+        Return a dict of config options.
+        Explicitly does NOT return the full config to avoid leakage of sensitive
+        information via rpc.
+        """
+        config = self._freqtrade.config
+        val = {
+            'dry_run': config.get('dry_run', False),
+            'stake_currency': config['stake_currency'],
+            'stake_amount': config['stake_amount'],
+            'minimal_roi': config['minimal_roi'].copy(),
+            'stoploss': config['stoploss'],
+            'trailing_stop': config['trailing_stop'],
+            'trailing_stop_positive': config.get('trailing_stop_positive'),
+            'trailing_stop_positive_offset': config.get('trailing_stop_positive_offset'),
+            'trailing_only_offset_is_reached': config.get('trailing_only_offset_is_reached'),
+            'ticker_interval': config['ticker_interval'],
+            'exchange': config['exchange']['name'],
+            'strategy': config['strategy'],
+        }
+        return val
+
     def _rpc_trade_status(self) -> List[Dict[str, Any]]:
         """
         Below follows the RPC backend it is prefixed with rpc_ to raise awareness that it is
@@ -274,34 +297,42 @@ class RPC:
             'best_rate': round(bp_rate * 100, 2),
         }
 
-    def _rpc_balance(self, fiat_display_currency: str) -> Dict:
+    def _rpc_balance(self, stake_currency: str, fiat_display_currency: str) -> Dict:
         """ Returns current account balance per crypto """
         output = []
         total = 0.0
-        for coin, balance in self._freqtrade.exchange.get_balances().items():
-            if not balance['total']:
+        try:
+            tickers = self._freqtrade.exchange.get_tickers()
+        except (TemporaryError, DependencyException):
+            raise RPCException('Error getting current tickers.')
+
+        for coin, balance in self._freqtrade.wallets.get_all_balances().items():
+            if not balance.total:
                 continue
 
-            if coin == 'BTC':
+            est_stake: float = 0
+            if coin == stake_currency:
                 rate = 1.0
+                est_stake = balance.total
             else:
                 try:
-                    pair = self._freqtrade.exchange.get_valid_pair_combination(coin, "BTC")
-                    if pair.startswith("BTC"):
-                        rate = 1.0 / self._freqtrade.get_sell_rate(pair, False)
-                    else:
-                        rate = self._freqtrade.get_sell_rate(pair, False)
+                    pair = self._freqtrade.exchange.get_valid_pair_combination(coin, stake_currency)
+                    rate = tickers.get(pair, {}).get('bid', None)
+                    if rate:
+                        if pair.startswith(stake_currency):
+                            rate = 1.0 / rate
+                        est_stake = rate * balance.total
                 except (TemporaryError, DependencyException):
                     logger.warning(f" Could not get rate for pair {coin}.")
                     continue
-            est_btc: float = rate * balance['total']
-            total = total + est_btc
+            total = total + (est_stake or 0)
             output.append({
                 'currency': coin,
-                'free': balance['free'] if balance['free'] is not None else 0,
-                'balance': balance['total'] if balance['total'] is not None else 0,
-                'used': balance['used'] if balance['used'] is not None else 0,
-                'est_btc': est_btc,
+                'free': balance.free if balance.free is not None else 0,
+                'balance': balance.total if balance.total is not None else 0,
+                'used': balance.used if balance.used is not None else 0,
+                'est_stake': est_stake or 0,
+                'stake': stake_currency,
             })
         if total == 0.0:
             if self._freqtrade.config.get('dry_run', False):
@@ -462,7 +493,7 @@ class RPC:
 
     def _rpc_whitelist(self) -> Dict:
         """ Returns the currently active whitelist"""
-        res = {'method': self._freqtrade.pairlists.name,
+        res = {'method': self._freqtrade.pairlists.name_list,
                'length': len(self._freqtrade.active_pair_whitelist),
                'whitelist': self._freqtrade.active_pair_whitelist
                }
@@ -477,7 +508,7 @@ class RPC:
                         and pair not in self._freqtrade.pairlists.blacklist):
                     self._freqtrade.pairlists.blacklist.append(pair)
 
-        res = {'method': self._freqtrade.pairlists.name,
+        res = {'method': self._freqtrade.pairlists.name_list,
                'length': len(self._freqtrade.pairlists.blacklist),
                'blacklist': self._freqtrade.pairlists.blacklist,
                }

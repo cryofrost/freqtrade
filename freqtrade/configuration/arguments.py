@@ -37,7 +37,13 @@ ARGS_LIST_TIMEFRAMES = ["exchange", "print_one_column"]
 ARGS_LIST_PAIRS = ["exchange", "print_list", "list_pairs_print_json", "print_one_column",
                    "print_csv", "base_currencies", "quote_currencies", "list_pairs_all"]
 
-ARGS_CREATE_USERDIR = ["user_data_dir"]
+ARGS_TEST_PAIRLIST = ["config", "quote_currencies", "print_one_column", "list_pairs_print_json"]
+
+ARGS_CREATE_USERDIR = ["user_data_dir", "reset"]
+
+ARGS_BUILD_STRATEGY = ["user_data_dir", "strategy", "template"]
+
+ARGS_BUILD_HYPEROPT = ["user_data_dir", "hyperopt", "template"]
 
 ARGS_DOWNLOAD_DATA = ["pairs", "pairs_file", "days", "download_trades", "exchange",
                       "timeframes", "erase"]
@@ -49,16 +55,23 @@ ARGS_PLOT_DATAFRAME = ["pairs", "indicators1", "indicators2", "plot_limit",
 ARGS_PLOT_PROFIT = ["pairs", "timerange", "export", "exportfilename", "db_url",
                     "trade_source", "ticker_interval"]
 
-NO_CONF_REQURIED = ["download-data", "list-timeframes", "list-markets", "list-pairs",
-                    "plot-dataframe", "plot-profit"]
+ARGS_HYPEROPT_LIST = ["hyperopt_list_best", "hyperopt_list_profitable", "print_colorized",
+                      "print_json", "hyperopt_list_no_details"]
 
-NO_CONF_ALLOWED = ["create-userdir", "list-exchanges"]
+ARGS_HYPEROPT_SHOW = ["hyperopt_list_best", "hyperopt_list_profitable", "hyperopt_show_index",
+                      "print_json", "hyperopt_show_no_header"]
+
+NO_CONF_REQURIED = ["download-data", "list-timeframes", "list-markets", "list-pairs",
+                    "hyperopt-list", "hyperopt-show", "plot-dataframe", "plot-profit"]
+
+NO_CONF_ALLOWED = ["create-userdir", "list-exchanges", "new-hyperopt", "new-strategy"]
 
 
 class Arguments:
     """
     Arguments Class. Manage the arguments received by the cli
     """
+
     def __init__(self, args: Optional[List[str]]) -> None:
         self.args = args
         self._parsed_arg: Optional[argparse.Namespace] = None
@@ -116,8 +129,10 @@ class Arguments:
 
         from freqtrade.optimize import start_backtesting, start_hyperopt, start_edge
         from freqtrade.utils import (start_create_userdir, start_download_data,
+                                     start_hyperopt_list, start_hyperopt_show,
                                      start_list_exchanges, start_list_markets,
-                                     start_list_timeframes, start_trading)
+                                     start_new_hyperopt, start_new_strategy,
+                                     start_list_timeframes, start_test_pairlist, start_trading)
         from freqtrade.plot.plot_utils import start_plot_dataframe, start_plot_profit
 
         subparsers = self.parser.add_subparsers(dest='command',
@@ -158,6 +173,18 @@ class Arguments:
         create_userdir_cmd.set_defaults(func=start_create_userdir)
         self._build_args(optionlist=ARGS_CREATE_USERDIR, parser=create_userdir_cmd)
 
+        # add new-strategy subcommand
+        build_strategy_cmd = subparsers.add_parser('new-strategy',
+                                                   help="Create new strategy")
+        build_strategy_cmd.set_defaults(func=start_new_strategy)
+        self._build_args(optionlist=ARGS_BUILD_STRATEGY, parser=build_strategy_cmd)
+
+        # add new-hyperopt subcommand
+        build_hyperopt_cmd = subparsers.add_parser('new-hyperopt',
+                                                   help="Create new hyperopt")
+        build_hyperopt_cmd.set_defaults(func=start_new_hyperopt)
+        self._build_args(optionlist=ARGS_BUILD_HYPEROPT, parser=build_hyperopt_cmd)
+
         # Add list-exchanges subcommand
         list_exchanges_cmd = subparsers.add_parser(
             'list-exchanges',
@@ -194,6 +221,14 @@ class Arguments:
         list_pairs_cmd.set_defaults(func=partial(start_list_markets, pairs_only=True))
         self._build_args(optionlist=ARGS_LIST_PAIRS, parser=list_pairs_cmd)
 
+        # Add test-pairlist subcommand
+        test_pairlist_cmd = subparsers.add_parser(
+            'test-pairlist',
+            help='Test your pairlist configuration.',
+        )
+        test_pairlist_cmd.set_defaults(func=start_test_pairlist)
+        self._build_args(optionlist=ARGS_TEST_PAIRLIST, parser=test_pairlist_cmd)
+
         # Add download-data subcommand
         download_data_cmd = subparsers.add_parser(
             'download-data',
@@ -220,3 +255,21 @@ class Arguments:
         )
         plot_profit_cmd.set_defaults(func=start_plot_profit)
         self._build_args(optionlist=ARGS_PLOT_PROFIT, parser=plot_profit_cmd)
+
+        # Add hyperopt-list subcommand
+        hyperopt_list_cmd = subparsers.add_parser(
+            'hyperopt-list',
+            help='List Hyperopt results',
+            parents=[_common_parser],
+        )
+        hyperopt_list_cmd.set_defaults(func=start_hyperopt_list)
+        self._build_args(optionlist=ARGS_HYPEROPT_LIST, parser=hyperopt_list_cmd)
+
+        # Add hyperopt-show subcommand
+        hyperopt_show_cmd = subparsers.add_parser(
+            'hyperopt-show',
+            help='Show details of Hyperopt results',
+            parents=[_common_parser],
+        )
+        hyperopt_show_cmd.set_defaults(func=start_hyperopt_show)
+        self._build_args(optionlist=ARGS_HYPEROPT_SHOW, parser=hyperopt_show_cmd)

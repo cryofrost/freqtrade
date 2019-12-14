@@ -24,14 +24,16 @@ jobs:
       script:
       - pytest --random-order --cov=freqtrade --cov-config=.coveragerc
       # Allow failure for coveralls
-      - coveralls || true
+      # - coveralls || true
       name: pytest
     - script:
       - cp config.json.example config.json
-      - freqtrade backtesting --datadir tests/testdata --strategy DefaultStrategy
+      - freqtrade create-userdir --userdir user_data
+      - freqtrade backtesting --datadir tests/testdata --strategy SampleStrategy
       name: backtest
     - script:
       - cp config.json.example config.json
+      - freqtrade create-userdir --userdir user_data
       - freqtrade hyperopt --datadir tests/testdata -e 5 --strategy SampleStrategy --hyperopt SampleHyperOpt
       name: hyperopt
     - script: flake8
@@ -45,11 +47,11 @@ jobs:
     - script: mypy freqtrade scripts
       name: mypy
 
-    - stage: docker
-      if: branch in (master, develop, feat/improve_travis) AND (type in (push, cron))
-      script:
-        - build_helpers/publish_docker.sh
-      name: "Build and test and push docker image"
+    # - stage: docker
+    #   if: branch in (master, develop, feat/improve_travis) AND (type in (push, cron))
+    #   script:
+    #     - build_helpers/publish_docker.sh
+    #   name: "Build and test and push docker image"
 
 notifications:
   slack:
