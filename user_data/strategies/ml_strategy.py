@@ -63,7 +63,7 @@ class MLStrategy(IStrategy):
 
     # Optimal stoploss designed for the strategy
     # This attribute will be overridden if the config file contains "stoploss"
-    stoploss = -0.085
+    stoploss = -0.003
 
     # Optimal ticker interval for the strategy
     ticker_interval = '1m'
@@ -253,7 +253,7 @@ class MLStrategy(IStrategy):
                 entries += nf.entries
             self.training_news = entries
         else:
-            if self.dp.runmode.value in ('backtest'):
+            if self.dp.runmode.value in ('backtest', 'hyperopt'):
                 entries = self.training_news
             else:
                 feed_url = "https://news.bitcoin.com/feed/"
