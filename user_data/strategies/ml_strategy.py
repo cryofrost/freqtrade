@@ -103,6 +103,15 @@ class MLStrategy(IStrategy):
                 self.config['exchange']['name'], self.config, False).exchange
             dataprovider = DataProvider(self.config, exchange)
             self.dp = dataprovider
+        #hyperopt case
+        if not self.dp:
+            from freqtrade.resolvers import ExchangeResolver
+            from freqtrade.data.dataprovider import DataProvider
+
+            exchange = ExchangeResolver(
+                self.config['exchange']['name'], self.config, False).exchange
+            dataprovider = DataProvider(self.config, exchange)
+            self.dp = dataprovider
 
         self.train()
 
