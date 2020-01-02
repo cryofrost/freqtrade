@@ -55,7 +55,7 @@ def test_may_execute_sell_stoploss_on_exchange_multi(default_conf, ticker, fee,
     mocker.patch('freqtrade.exchange.Binance.stoploss_limit', stoploss_limit)
     mocker.patch.multiple(
         'freqtrade.exchange.Exchange',
-        get_ticker=ticker,
+        fetch_ticker=ticker,
         get_fee=fee,
         symbol_amount_prec=lambda s, x, y: y,
         symbol_price_prec=lambda s, x, y: y,
@@ -71,6 +71,7 @@ def test_may_execute_sell_stoploss_on_exchange_multi(default_conf, ticker, fee,
     )
     mocker.patch("freqtrade.strategy.interface.IStrategy.should_sell", should_sell_mock)
     wallets_mock = mocker.patch("freqtrade.wallets.Wallets.update", MagicMock())
+    mocker.patch("freqtrade.wallets.Wallets.get_free", MagicMock(return_value=1000))
 
     freqtrade = get_patched_freqtradebot(mocker, default_conf)
     freqtrade.strategy.order_types['stoploss_on_exchange'] = True
@@ -79,7 +80,7 @@ def test_may_execute_sell_stoploss_on_exchange_multi(default_conf, ticker, fee,
     patch_get_signal(freqtrade)
 
     # Create some test data
-    freqtrade.create_trades()
+    freqtrade.enter_positions()
     wallets_mock.reset_mock()
     Trade.session = MagicMock()
 
@@ -89,7 +90,8 @@ def test_may_execute_sell_stoploss_on_exchange_multi(default_conf, ticker, fee,
         trade.stoploss_order_id = 3
         trade.open_order_id = None
 
-    freqtrade.process_maybe_execute_sells(trades)
+    n = freqtrade.exit_positions(trades)
+    assert n == 2
     assert should_sell_mock.call_count == 2
 
     # Only order for 3rd trade needs to be cancelled
@@ -117,15 +119,13 @@ def test_forcebuy_last_unlimited(default_conf, ticker, fee, limit_buy_order, moc
     default_conf['max_open_trades'] = 5
     default_conf['forcebuy_enable'] = True
     default_conf['stake_amount'] = 'unlimited'
+    default_conf['dry_run_wallet'] = 1000
     default_conf['exchange']['name'] = 'binance'
     default_conf['telegram']['enabled'] = True
     mocker.patch('freqtrade.rpc.telegram.Telegram', MagicMock())
-    mocker.patch('freqtrade.wallets.Wallets.get_free', MagicMock(
-        side_effect=[1000, 800, 600, 400, 200]
-    ))
     mocker.patch.multiple(
         'freqtrade.exchange.Exchange',
-        get_ticker=ticker,
+        fetch_ticker=ticker,
         get_fee=fee,
         symbol_amount_prec=lambda s, x, y: y,
         symbol_price_prec=lambda s, x, y: y,
@@ -137,6 +137,14 @@ def test_forcebuy_last_unlimited(default_conf, ticker, fee, limit_buy_order, moc
         update_trade_state=MagicMock(),
         _notify_sell=MagicMock(),
     )
+    should_sell_mock = MagicMock(side_effect=[
+        SellCheckTuple(sell_flag=False, sell_type=SellType.NONE),
+        SellCheckTuple(sell_flag=True, sell_type=SellType.SELL_SIGNAL),
+        SellCheckTuple(sell_flag=False, sell_type=SellType.NONE),
+        SellCheckTuple(sell_flag=False, sell_type=SellType.NONE),
+        SellCheckTuple(sell_flag=None, sell_type=SellType.NONE)]
+    )
+    mocker.patch("freqtrade.strategy.interface.IStrategy.should_sell", should_sell_mock)
 
     freqtrade = get_patched_freqtradebot(mocker, default_conf)
     rpc = RPC(freqtrade)
@@ -146,7 +154,8 @@ def test_forcebuy_last_unlimited(default_conf, ticker, fee, limit_buy_order, moc
     patch_get_signal(freqtrade)
 
     # Create 4 trades
-    freqtrade.create_trades()
+    n = freqtrade.enter_positions()
+    assert n == 4
 
     trades = Trade.query.all()
     assert len(trades) == 4
@@ -157,3 +166,21 @@ def test_forcebuy_last_unlimited(default_conf, ticker, fee, limit_buy_order, moc
 
     for trade in trades:
         assert trade.stake_amount == 200
+        # Reset trade open order id's
+        trade.open_order_id = None
+    trades = Trade.get_open_trades()
+    assert len(trades) == 5
+    bals = freqtrade.wallets.get_all_balances()
+
+    n = freqtrade.exit_positions(trades)
+    assert n == 1
+    trades = Trade.get_open_trades()
+    # One trade sold
+    assert len(trades) == 4
+    # Validate that balance of sold trade is not in dry-run balances anymore.
+    bals2 = freqtrade.wallets.get_all_balances()
+    assert bals != bals2
+    assert len(bals) == 6
+    assert len(bals2) == 5
+    assert 'LTC' in bals
+    assert 'LTC' not in bals2

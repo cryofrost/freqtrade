@@ -331,7 +331,15 @@ class Telegram(RPC):
         try:
             result = self._rpc_balance(self._config['stake_currency'],
                                        self._config.get('fiat_display_currency', ''))
+
             output = ''
+            if self._config['dry_run']:
+                output += (
+                    f"*Warning:* Simulated balances in Dry Mode.\n"
+                    "This mode is still experimental!\n"
+                    "Starting capital: "
+                    f"`{self._config['dry_run_wallet']}` {self._config['stake_currency']}.\n"
+                    )
             for currency in result['currencies']:
                 if currency['est_stake'] > 0.0001:
                     curr_output = "*{currency}:*\n" \
@@ -350,7 +358,7 @@ class Telegram(RPC):
                     output += curr_output
 
             output += "\n*Estimated Value*:\n" \
-                      "\t`BTC: {total: .8f}`\n" \
+                      "\t`{stake}: {total: .8f}`\n" \
                       "\t`{symbol}: {value: .2f}`\n".format(**result)
             self._send_msg(output)
         except RPCException as e:
@@ -605,7 +613,7 @@ class Telegram(RPC):
             f"*Minimum ROI:* `{val['minimal_roi']}`\n"
             f"{sl_info}"
             f"*Ticker Interval:* `{val['ticker_interval']}`\n"
-            f"*Strategy:* `{val['strategy']}`'"
+            f"*Strategy:* `{val['strategy']}`"
         )
 
     def _send_msg(self, msg: str, parse_mode: ParseMode = ParseMode.MARKDOWN) -> None:

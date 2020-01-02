@@ -6,6 +6,7 @@ This module contains the hyperopt logic
 
 import locale
 import logging
+import random
 import sys
 import warnings
 from collections import OrderedDict
@@ -21,13 +22,13 @@ from joblib import (Parallel, cpu_count, delayed, dump, load,
                     wrap_non_picklable_objects)
 from pandas import DataFrame
 
-from freqtrade import OperationalException
-from freqtrade.data.history import get_timeframe, trim_dataframe
+from freqtrade.data.history import get_timerange, trim_dataframe
+from freqtrade.exceptions import OperationalException
 from freqtrade.misc import plural, round_dict
 from freqtrade.optimize.backtesting import Backtesting
 # Import IHyperOpt and IHyperOptLoss to allow unpickling classes from these modules
-from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F4
-from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F4
+from freqtrade.optimize.hyperopt_interface import IHyperOpt  # noqa: F401
+from freqtrade.optimize.hyperopt_loss_interface import IHyperOptLoss  # noqa: F401
 from freqtrade.resolvers.hyperopt_resolver import (HyperOptLossResolver,
                                                    HyperOptResolver)
 
@@ -63,9 +64,9 @@ class Hyperopt:
 
         self.backtesting = Backtesting(self.config)
 
-        self.custom_hyperopt = HyperOptResolver(self.config).hyperopt
+        self.custom_hyperopt = HyperOptResolver.load_hyperopt(self.config)
 
-        self.custom_hyperoptloss = HyperOptLossResolver(self.config).hyperoptloss
+        self.custom_hyperoptloss = HyperOptLossResolver.load_hyperoptloss(self.config)
         self.calculate_loss = self.custom_hyperoptloss.hyperopt_loss_function
 
         self.trials_file = (self.config['user_data_dir'] /
@@ -368,7 +369,7 @@ class Hyperopt:
 
         processed = load(self.tickerdata_pickle)
 
-        min_date, max_date = get_timeframe(processed)
+        min_date, max_date = get_timerange(processed)
 
         backtesting_results = self.backtesting.backtest(
             {
@@ -436,7 +437,7 @@ class Hyperopt:
             acq_optimizer="auto",
             n_initial_points=INITIAL_POINTS,
             acq_optimizer_kwargs={'n_jobs': cpu_count},
-            random_state=self.config.get('hyperopt_random_state', None),
+            random_state=self.random_state,
         )
 
     def fix_optimizer_models_list(self):
@@ -475,7 +476,13 @@ class Hyperopt:
             logger.info(f"Loaded {len(trials)} previous evaluations from disk.")
         return trials
 
+    def _set_random_state(self, random_state: Optional[int]) -> int:
+        return random_state or random.randint(1, 2**16 - 1)
+
     def start(self) -> None:
+        self.random_state = self._set_random_state(self.config.get('hyperopt_random_state', None))
+        logger.info(f"Using optimizer random state: {self.random_state}")
+
         data, timerange = self.backtesting.load_bt_data()
 
         preprocessed = self.backtesting.strategy.tickerdata_to_dataframe(data)
@@ -483,7 +490,7 @@ class Hyperopt:
         # Trim startup period from analyzed dataframe
         for pair, df in preprocessed.items():
             preprocessed[pair] = trim_dataframe(df, timerange)
-        min_date, max_date = get_timeframe(data)
+        min_date, max_date = get_timerange(data)
 
         logger.info(
             'Hyperopting with data from %s up to %s (%s days)..',

@@ -168,11 +168,24 @@ class IStrategy(ABC):
         """
         Locks pair until a given timestamp happens.
         Locked pairs are not analyzed, and are prevented from opening new trades.
+        Locks can only count up (allowing users to lock pairs for a longer period of time).
+        To remove a lock from a pair, use `unlock_pair()`
         :param pair: Pair to lock
         :param until: datetime in UTC until the pair should be blocked from opening new trades.
                 Needs to be timezone aware `datetime.now(timezone.utc)`
         """
-        self._pair_locked_until[pair] = until
+        if pair not in self._pair_locked_until or self._pair_locked_until[pair] < until:
+            self._pair_locked_until[pair] = until
+
+    def unlock_pair(self, pair) -> None:
+        """
+        Unlocks a pair previously locked using lock_pair.
+        Not used by freqtrade itself, but intended to be used if users lock pairs
+        manually from within the strategy, to allow an easy way to unlock pairs.
+        :param pair: Unlock pair to allow trading again
+        """
+        if pair in self._pair_locked_until:
+            del self._pair_locked_until[pair]
 
     def is_pair_locked(self, pair: str) -> bool:
         """
@@ -296,7 +309,7 @@ class IStrategy(ABC):
         """
         # Set current rate to low for backtesting sell
         current_rate = low or rate
-        current_profit = trade.calc_profit_percent(current_rate)
+        current_profit = trade.calc_profit_ratio(current_rate)
 
         trade.adjust_min_max_rates(high or current_rate)
 
@@ -311,7 +324,7 @@ class IStrategy(ABC):
 
         # Set current rate to high for backtesting sell
         current_rate = high or rate
-        current_profit = trade.calc_profit_percent(current_rate)
+        current_profit = trade.calc_profit_ratio(current_rate)
         config_ask_strategy = self.config.get('ask_strategy', {})
 
         if buy and config_ask_strategy.get('ignore_roi_if_buy_signal', False):
@@ -360,7 +373,7 @@ class IStrategy(ABC):
             sl_offset = self.trailing_stop_positive_offset
 
             # Make sure current_profit is calculated using high for backtesting.
-            high_profit = current_profit if not high else trade.calc_profit_percent(high)
+            high_profit = current_profit if not high else trade.calc_profit_ratio(high)
 
             # Don't update stoploss if trailing_only_offset_is_reached is true.
             if not (self.trailing_only_offset_is_reached and high_profit < sl_offset):
@@ -394,7 +407,7 @@ class IStrategy(ABC):
 
         return SellCheckTuple(sell_flag=False, sell_type=SellType.NONE)
 
-    def min_roi_reached_entry(self, trade_dur: int) -> Optional[float]:
+    def min_roi_reached_entry(self, trade_dur: int) -> Tuple[Optional[int], Optional[float]]:
         """
         Based on trade duration defines the ROI entry that may have been reached.
         :param trade_dur: trade duration in minutes
@@ -403,9 +416,9 @@ class IStrategy(ABC):
         # Get highest entry in ROI dict where key <= trade-duration
         roi_list = list(filter(lambda x: x <= trade_dur, self.minimal_roi.keys()))
         if not roi_list:
-            return None
+            return None, None
         roi_entry = max(roi_list)
-        return self.minimal_roi[roi_entry]
+        return roi_entry, self.minimal_roi[roi_entry]
 
     def min_roi_reached(self, trade: Trade, current_profit: float, current_time: datetime) -> bool:
         """
@@ -415,7 +428,7 @@ class IStrategy(ABC):
         """
         # Check if time matches and current rate is above threshold
         trade_dur = int((current_time.timestamp() - trade.open_date.timestamp()) // 60)
-        roi = self.min_roi_reached_entry(trade_dur)
+        _, roi = self.min_roi_reached_entry(trade_dur)
         if roi is None:
             return False
         else:
