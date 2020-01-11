@@ -102,8 +102,8 @@ class MLStrategy(IStrategy):
             from freqtrade.resolvers import ExchangeResolver
             from freqtrade.data.dataprovider import DataProvider
 
-            exchange = ExchangeResolver(
-                self.config['exchange']['name'], self.config, False).exchange
+            exchange = ExchangeResolver.load_exchange(
+                self.config['exchange']['name'], self.config, False)
             dataprovider = DataProvider(self.config, exchange)
             self.dp = dataprovider
         #hyperopt case
@@ -111,8 +111,8 @@ class MLStrategy(IStrategy):
             from freqtrade.resolvers import ExchangeResolver
             from freqtrade.data.dataprovider import DataProvider
 
-            exchange = ExchangeResolver(
-                self.config['exchange']['name'], self.config, False).exchange
+            exchange = ExchangeResolver.load_exchange(
+                self.config['exchange']['name'], self.config, False)
             dataprovider = DataProvider(self.config, exchange)
             self.dp = dataprovider
 
@@ -128,22 +128,24 @@ class MLStrategy(IStrategy):
         if self.dp:
             pair = self.dp._config['pairs'][0]
             default_datadir = self.dp._config['datadir']
-            train_datadir = default_datadir.replace('user_data/data', 'user_data/train_data/candles')
+            from pathlib import PosixPath
+            train_datadir = PosixPath(str(default_datadir).replace('user_data/data', 'user_data/train_data/candles'))
             self.dp._config['datadir'] = train_datadir
             dataframe = self.dp.historic_ohlcv(pair)
             metadata = {'pair': pair}
             dataframe = self.populate_indicators(dataframe, metadata)
+            self.dp._config['datadir'] = default_datadir
 
         df = dataframe.dropna()
         # print(df.keys())
         df.set_index('date', drop=False)
         # print(df.tail())
         self.to_drop = ['date',
-                        # 'volume',
-                        # 'close_to_sma',
-                        # 'high', 'low',
-                        # 'open', 'close',
-                        'perc_change',
+                        'volume',
+                        'high', 'low',
+                        'open',
+                        'close',
+                        # 'perc_change',
                         'macd',
                         'macdsignal',
                         'minus_di',
@@ -151,17 +153,19 @@ class MLStrategy(IStrategy):
                         'rsi',
                         'fisher_rsi', 'fisher_rsi_norma',
                         'fastd', 'fastk',
+                        # 'tema_base', 'tema_long', 'tema_short',
                         'sar', 'sma'
                         ]
 
         df_filtered = df.drop(self.to_drop, axis=1)
-        
+     
         fr_features = []
         for feature in [
                         'high', 'low', 'open', 'close',
-                        'volume', 'perc_change', 
+                        'volume',
                         'minus_di', 'rsi', 'fastd', 'fastk',
                         'fisher_rsi', 'fisher_rsi_norma',
+                        'tema_base', 'tema_long', 'tema_short',
                         'sar', 'sma', 'TRANGE'
                         ]:
             if feature in df_filtered.keys():
@@ -169,7 +173,7 @@ class MLStrategy(IStrategy):
         self.fr_features = fr_features
 
         neg_features = []
-        for feature in ['macd', 'macdsignal']:
+        for feature in ['perc_change', 'macd', 'macdsignal']:
             if feature in df_filtered.keys():
                 neg_features.append(feature)
         self.neg_features = neg_features
@@ -194,64 +198,41 @@ class MLStrategy(IStrategy):
         # imp = Imputer(missing_values='NaN', strategy='mean', axis=0)
         # label = imp.fit_transform(label)
         # label[0] = label[1]
-        history_points = self.startup_candle_count
-        features_repacked = numpy.array([features[i  : i + history_points].copy() for i in range(len(features) - history_points)])
+        # history_points = self.startup_candle_count
+        # features_repacked = numpy.array([features[i  : i + history_points].copy() for i in range(len(features) - history_points)])
 
         training_features, testing_features, training_target, testing_target = \
-            train_test_split(features_repacked[:future], target[:-history_points], random_state=0.75, shuffle=False)
+            train_test_split(features[:future], target, random_state=0.75, shuffle=False)
 
         # for i in range(1):
             # print('train: ', training_features[i], training_target[i])
         #     print('test:', testing_features[i], testing_target[i])
-        
-        import keras
-        import sys
-        import tensorflow as tf
-        from keras.models import Model
-        from keras.layers import Dense, Dropout, LSTM, Input, Activation, concatenate, Flatten
-        from keras import optimizers
-        # import numpy as np
-        numpy.random.seed(4)
-        # from tensorflow import set_random_seed
-        # set_random_seed(4)
-        
-        ishape=training_features[0].shape
-        # ashape=training_features.shape
-        n_n = ishape[1]
-        # ValueError: Error when checking input: expected lstm_input to have shape (120, 1) but got array with shape (120, 6)
-
-        lstm_input = Input(shape=ishape, name='lstm_input')
-        x = LSTM(10 * n_n, name='lstm_0')(lstm_input)
-        x = Dropout(0.2, name='lstm_dropout_0')(x)
-        # x = Flatten()(x)
-        # x = Dense(2 ** (n_n + 1), name='dense_0')(x)
-        x = Dense(12 * n_n, name='dense_0')(x)
-        x = Activation('sigmoid', name='sigmoid_0')(x)
-        x = Dense(1, name='dense_1')(x)
-        output = Activation('linear', name='linear_output')(x)
-        model = Model(inputs=lstm_input, outputs=output)
-
-        adam = optimizers.Adam(lr=0.0005)
-
-        model.compile(optimizer=adam, loss='mse')
-        # model = KNeighborsRegressor(n_neighbors=4, p=2, weights="distance", n_jobs=4)
-        # model.fit(training_features, training_target)
-        # training_features = numpy.expand_dims(training_features, axis=2)
-        # testing_features = numpy.expand_dims(testing_features, axis=2)
-        # model.fit(x=training_features, y=training_target, batch_size=32, epochs=50, shuffle=True, validation_split=0.1)
-        # model.save('./user_data/model/lstm.mdl')
+        # from tpot import TPOTRegressor
+        # import sys
+        # #my_tpot = TPOTRegressor(generations=10, verbosity=2, n_jobs=-2, config_dict='TPOT light')
+        # my_tpot = TPOTRegressor(generations=10, verbosity=2, population_size=10, n_jobs=-2)
+        # my_tpot.fit(training_features, training_target)
+        # print(my_tpot.score(testing_features, testing_target))
+        # my_tpot.export('tpot_exported_pipeline_tema2perc_change.py')
         # sys.exit(0)
-        model = keras.models.load_model('./user_data/model/lstm.mdl')
-        # from keras.utils import plot_model
-        # plot_model(model, to_file='./user_data/model/model.png', show_shapes=True, expand_nested=True)
-        # evaluation = model.evaluate(ohlcv_test, y_test)
-        # print(evaluation)
+        from sklearn.ensemble import GradientBoostingRegressor
+        from sklearn.preprocessing import Normalizer
+        from sklearn.pipeline import make_pipeline
+        model = make_pipeline(
+            # Normalizer(norm="l2"),
+            GradientBoostingRegressor(alpha=0.85, learning_rate=0.01, loss="huber", max_depth=4, max_features=0.5, min_samples_leaf=2, min_samples_split=6, n_estimators=100, subsample=0.8500000000000001)
+        )
+        # model = KNeighborsRegressor(n_neighbors=14, p=2, weights="distance", n_jobs=4, )
+        model.fit(training_features, training_target)
+        # evaluation = model.evaluate(testing_features, testing_target)
+        evaluation = model.score(testing_features, testing_target)
+
         response = 'Model fitted using dataframe of length = '\
                     + str(len(training_features))\
                     + ' during '\
                     + str(time.time() - start)\
                     + ' seconds with testing score = '
-        print(response, model.evaluate(testing_features, testing_target))
+        print(response, evaluation)
         # sys.exit(0)
         # joblib.dump(model, 'gdb_' + pair + '.pkl')
         self.model = model
@@ -383,6 +364,9 @@ class MLStrategy(IStrategy):
 
         # SMA - Simple Moving Average
         dataframe['sma'] = ta.SMA(dataframe, timeperiod=40)
+        dataframe['tema_base'] = ta.TEMA(dataframe, timeperiod=40)
+        dataframe['tema_long'] = ta.TEMA(dataframe, timeperiod=19)
+        dataframe['tema_short'] = ta.TEMA(dataframe, timeperiod=9)
         # dataframe['close_to_sma'] = dataframe['close'] / dataframe['sma']
 
         dataframe['TRANGE'] = ta.TRANGE(dataframe)
@@ -393,7 +377,7 @@ class MLStrategy(IStrategy):
         # dataframe['alfa'] = alfa['sentiment']
 
         if self.is_trained:
-            # dataframe = dataframe.dropna()
+            dataframe = dataframe.dropna()
             dataframe['future_perc_change'] = self.predict(dataframe)
 
         return dataframe
@@ -406,13 +390,14 @@ class MLStrategy(IStrategy):
             df_filtered[self.neg_features] = self.neg_scaler.fit_transform(df_filtered[self.neg_features])
         features = (pd.np.array(df_filtered.values))
         # features = numpy.expand_dims(features, axis=2)
-        history_points = self.startup_candle_count
-        features_repacked = numpy.array([features[i  : i + history_points].copy() for i in range(len(features) - history_points)])
+        # history_points = self.startup_candle_count
+        # features_repacked = numpy.array([features[i  : i + history_points].copy() for i in range(len(features) - history_points)])
 
         # features = pd.np.array(df.drop(self.to_drop, axis=1).values)
-        predcs_class = self.model.predict(features_repacked)
-        predcs_class = self.t_neg_scaler.inverse_transform(predcs_class)
-        res = numpy.pad(predcs_class, ((history_points, 0), (0, 0)), mode='constant', constant_values=0)
+        predcs_class = self.model.predict(features)
+        predcs_class = self.t_neg_scaler.inverse_transform(predcs_class.reshape(-1, 1))
+        # res = numpy.pad(predcs_class, ((history_points, 0), (0, 0)), mode='constant', constant_values=0)
+        res = predcs_class
         for i in range(1):
             print('predict: ', features[i], predcs_class[i])
         return res
