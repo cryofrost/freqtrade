@@ -34,6 +34,7 @@ from bs4 import BeautifulSoup
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import pandas as pd
 import talib.abstract as ta
+import freqtrade.vendor.qtpylib.indicators as qtpylib
 from freqtrade.strategy.interface import IStrategy
 
 logger = logging.getLogger('ML Strategy')
@@ -68,7 +69,7 @@ class MLStrategy(IStrategy):
     # Optimal ticker interval for the strategy
     ticker_interval = '1m'
 
-    startup_candle_count: int = 50
+    startup_candle_count: int = 120
 
 
     # trailing stoploss
@@ -133,25 +134,27 @@ class MLStrategy(IStrategy):
             dataframe = self.dp.historic_ohlcv(pair)
             metadata = {'pair': pair}
             dataframe = self.populate_indicators(dataframe, metadata)
+            self.dp._config['datadir'] = default_datadir
 
         df = dataframe.dropna()
         # print(df.keys())
         df.set_index('date', drop=False)
         # print(df.tail())
         self.to_drop = ['date',
-                        # 'volume',
-                        # 'close_to_sma',
-                        # 'high', 'low',
-                        # 'open', 'close',
-                        'perc_change',
+                        'volume',
+                        'high', 'low',
+                        'open',
+                        # 'close',
                         'macd',
                         'macdsignal',
                         'minus_di',
-                        'TRANGE',
                         'rsi',
                         'fisher_rsi', 'fisher_rsi_norma',
                         'fastd', 'fastk',
                         'sar', 'sma'
+                        # 'bb_lowerband',
+                        # 'bb_middleband',
+                        # 'bb_upperband'
                         ]
 
         df_filtered = df.drop(self.to_drop, axis=1)
@@ -159,10 +162,14 @@ class MLStrategy(IStrategy):
         fr_features = []
         for feature in [
                         'high', 'low', 'open', 'close',
-                        'volume', 'perc_change', 
+                        'volume', 'perc_change',
                         'minus_di', 'rsi', 'fastd', 'fastk',
                         'fisher_rsi', 'fisher_rsi_norma',
-                        'sar', 'sma', 'TRANGE'
+                        'tema_base', 'tema_long', 'tema_short',
+                        'sar', 'sma', 'sentiment',
+                        'bb_lowerband',
+                        'bb_middleband',
+                        'bb_upperband'
                         ]:
             if feature in df_filtered.keys():
                 fr_features.append(feature)
@@ -179,14 +186,15 @@ class MLStrategy(IStrategy):
         self.fr_scaler = MinMaxScaler(feature_range=(0, 1))
         df_filtered[self.fr_features] = self.fr_scaler.fit_transform(df_filtered[self.fr_features])
         self.neg_scaler = MinMaxScaler(feature_range=(-1, 1))
-        self.t_neg_scaler = MinMaxScaler(feature_range=(-1, 1))
+        # self.t_neg_scaler = MinMaxScaler(feature_range=(-1, 1))
+        self.t_fr_scaler = MinMaxScaler(feature_range=(0, 1))
         if len(neg_features) > 0:
             df_filtered[self.neg_features] = self.neg_scaler.fit_transform(df_filtered[self.neg_features])
         features = (pd.np.array(df_filtered.values))
 
         future = -1  # to shift forward
         label = df.shift(future).copy()
-        scaled_label = self.t_neg_scaler.fit_transform(label['perc_change'].dropna().values.reshape(-1, 1))
+        scaled_label = self.t_fr_scaler.fit_transform(label['close'].dropna().values.reshape(-1, 1))
         # target = label['perc_change'].dropna().values
         target = scaled_label
 
@@ -207,43 +215,84 @@ class MLStrategy(IStrategy):
         import keras
         import sys
         import tensorflow as tf
-        from keras.models import Model
-        from keras.layers import Dense, Dropout, LSTM, Input, Activation, concatenate, Flatten
-        from keras import optimizers
+        from keras.models import Model, Sequential
+        from keras.layers import Dense, Dropout, LSTM, Input, Activation, concatenate, Flatten, Conv1D, BatchNormalization, MaxPooling1D
+        from keras.layers.advanced_activations import LeakyReLU
+        from keras import initializers, optimizers
+        from tqdm import tqdm
         # import numpy as np
         numpy.random.seed(4)
         # from tensorflow import set_random_seed
         # set_random_seed(4)
         
         ishape=training_features[0].shape
-        # ashape=training_features.shape
+        ashape=training_features.shape
         n_n = ishape[1]
         # ValueError: Error when checking input: expected lstm_input to have shape (120, 1) but got array with shape (120, 6)
 
         lstm_input = Input(shape=ishape, name='lstm_input')
-        x = LSTM(10 * n_n, name='lstm_0')(lstm_input)
-        x = Dropout(0.2, name='lstm_dropout_0')(x)
+        x = LSTM(n_n, name='lstm_0', return_sequences=True)(lstm_input)
+        x = LSTM(n_n^3*2, name='lstm_1')(x)
+        # x = Dropout(0.2, name='lstm_dropout_0')(x)
         # x = Flatten()(x)
         # x = Dense(2 ** (n_n + 1), name='dense_0')(x)
-        x = Dense(12 * n_n, name='dense_0')(x)
-        x = Activation('sigmoid', name='sigmoid_0')(x)
-        x = Dense(1, name='dense_1')(x)
-        output = Activation('linear', name='linear_output')(x)
+        # x = Dense(12 * n_n, name='dense_0')(x)
+        # x = Activation('sigmoid', name='sigmoid_0')(x)
+        # x = Dense(1, name='dense_1')(x)
+        # output = Activation('linear', name='linear_output')(x)
+        output = Dense(1, name='mlpt_output', activation=tf.nn.relu)(x)
         model = Model(inputs=lstm_input, outputs=output)
 
         adam = optimizers.Adam(lr=0.0005)
+        # adam = optimizers.Adam()
 
         model.compile(optimizer=adam, loss='mse')
+
+        g_model = Sequential()
+        g_model.add(LSTM(n_n, name='lstm_0', return_sequences=True))
+        g_model.add(LSTM(n_n^3*2, name='lstm_1'))
+        g_model.add(Dense(1, name='mlpt_output', activation=tf.nn.relu))
+        g_model.compile(optimizer=adam, loss='mse')
+
+        d_model = Sequential()
+        d_model.add(Conv1D(32, kernel_size=(5,), strides=(2,)))
+        d_model.add(LeakyReLU(.01))
+        d_model.add(Conv1D(64, kernel_size=(5,), strides=(2,)))
+        d_model.add(LeakyReLU(.01))
+        # d_model.add(BatchNormalization(axis=1, epsilon=1e-05, momentum=0.9, fix_gamma=False, use_global_stats=False, in_channels=None))
+        d_model.add(BatchNormalization(axis=2, epsilon=1e-05, momentum=0.9))
+        d_model.add(Conv1D(128, kernel_size=(5,), strides=(2,)))
+        d_model.add(LeakyReLU(.01))
+        d_model.add(BatchNormalization(axis=2, epsilon=1e-05, momentum=0.9))
+        d_model.add(Dense(220, activation="linear"))
+        d_model.add(BatchNormalization(axis=2, epsilon=1e-05, momentum=0.9))
+        d_model.add(LeakyReLU(.01))
+        d_model.add(Dense(220, activation="linear"))
+        d_model.add(Activation("relu"))
+        d_model.add(Dense(1, activation="linear"))
+        d_model.compile(optimizer=adam, loss='mse')
+
+        from keras.utils import plot_model, print_summary
+        # plot_model(d_model, to_file='./user_data/model/d_model.png', show_shapes=True, expand_nested=True)
+        # print_summary(d_model)
+        ganInput = Input(shape=ishape)
+        x = g_model(ganInput)
+        plot_model(g_model, to_file='./user_data/model/g_model.png', show_shapes=True, expand_nested=True)
+        print_summary(g_model)
+        d_output = d_model(x)
+        
+        gan_model = Model(inputs=lstm_input, outputs=d_output)
+        gan_model.compile(loss='binary_crossentropy', optimizer=adam)
+
         # model = KNeighborsRegressor(n_neighbors=4, p=2, weights="distance", n_jobs=4)
         # model.fit(training_features, training_target)
         # training_features = numpy.expand_dims(training_features, axis=2)
         # testing_features = numpy.expand_dims(testing_features, axis=2)
         # model.fit(x=training_features, y=training_target, batch_size=32, epochs=50, shuffle=True, validation_split=0.1)
-        # model.save('./user_data/model/lstm.mdl')
+        model.fit(x=training_features, y=training_target, epochs=10)
+        model.save('./user_data/model/lstm.mdl')
         # sys.exit(0)
-        model = keras.models.load_model('./user_data/model/lstm.mdl')
-        # from keras.utils import plot_model
-        # plot_model(model, to_file='./user_data/model/model.png', show_shapes=True, expand_nested=True)
+        # model = keras.models.load_model('./user_data/model/lstm.mdl')
         # evaluation = model.evaluate(ohlcv_test, y_test)
         # print(evaluation)
         response = 'Model fitted using dataframe of length = '\
@@ -334,7 +383,7 @@ class MLStrategy(IStrategy):
             candle_date = dataframe.iloc[idx].date
             dataframe.loc[(dataframe.date == candle_date), col] = sentiment
 
-            logger.info("Got alfa {} for candle at {}".format(sentiment, candle_date))
+            logger.debug("Got alfa {} for candle at {}".format(sentiment, candle_date))
 
         # from sklearn.impute import SimpleImputer
         # imp = SimpleImputer(missing_values='NaN', strategy='mean')
@@ -383,18 +432,26 @@ class MLStrategy(IStrategy):
 
         # SMA - Simple Moving Average
         dataframe['sma'] = ta.SMA(dataframe, timeperiod=40)
+        dataframe['tema_base'] = ta.TEMA(dataframe, timeperiod=40)
+        dataframe['tema_long'] = ta.TEMA(dataframe, timeperiod=19)
+        dataframe['tema_short'] = ta.TEMA(dataframe, timeperiod=9)
         # dataframe['close_to_sma'] = dataframe['close'] / dataframe['sma']
 
-        dataframe['TRANGE'] = ta.TRANGE(dataframe)
-        dataframe['perc_change'] = 100 * (dataframe['close'] - dataframe['open']) / dataframe['open']
+        # dataframe['TRANGE'] = ta.TRANGE(dataframe)
+        # dataframe['perc_change'] = 100 * (dataframe['close'] - dataframe['open']) / dataframe['open']
+        
+        # Bollinger bands
+        bollinger = qtpylib.bollinger_bands(qtpylib.typical_price(dataframe), window=20, stds=2)
+        dataframe['bb_lowerband'] = bollinger['lower']
+        dataframe['bb_middleband'] = bollinger['mid']
+        dataframe['bb_upperband'] = bollinger['upper']
 
         # News feed analysis
-        # dataframe = self.analyze_news(dataframe)
-        # dataframe['alfa'] = alfa['sentiment']
+        dataframe = self.analyze_news(dataframe)
 
         if self.is_trained:
             # dataframe = dataframe.dropna()
-            dataframe['future_perc_change'] = self.predict(dataframe)
+            dataframe['future_close'] = self.predict(dataframe)
 
         return dataframe
 
@@ -409,9 +466,12 @@ class MLStrategy(IStrategy):
         history_points = self.startup_candle_count
         features_repacked = numpy.array([features[i  : i + history_points].copy() for i in range(len(features) - history_points)])
 
+        scaled_label = self.t_fr_scaler.fit_transform(dataframe['close'].dropna().values.reshape(-1, 1))
+
+
         # features = pd.np.array(df.drop(self.to_drop, axis=1).values)
         predcs_class = self.model.predict(features_repacked)
-        predcs_class = self.t_neg_scaler.inverse_transform(predcs_class)
+        predcs_class = self.t_fr_scaler.inverse_transform(predcs_class)
         res = numpy.pad(predcs_class, ((history_points, 0), (0, 0)), mode='constant', constant_values=0)
         for i in range(1):
             print('predict: ', features[i], predcs_class[i])
@@ -440,7 +500,7 @@ class MLStrategy(IStrategy):
             # (dataframe['future_perc_change'] > dataframe['perc_change']),
             (
                 # (dataframe['future_perc_change'] - dataframe['perc_change'] >= delta) &
-                (dataframe['future_perc_change'] > delta * 2)
+                ((dataframe['future_close'] - dataframe['close']) > delta * 2)
             ),
             'buy'] = 1
 
@@ -463,6 +523,6 @@ class MLStrategy(IStrategy):
             #     (dataframe['sar'] > dataframe['close']) &
             #     dataframe['fisher_rsi'] > 0.3
             # ),
-            (dataframe['future_perc_change'] < dataframe['perc_change']),
+            (dataframe['future_close'] < dataframe['close']),
             'sell'] = 1
         return dataframe
