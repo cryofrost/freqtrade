@@ -1,6 +1,6 @@
 # Development Help
 
-This page is intended for developers of FreqTrade, people who want to contribute to the FreqTrade codebase or documentation, or people who want to understand the source code of the application they're running.
+This page is intended for developers of Freqtrade, people who want to contribute to the Freqtrade codebase or documentation, or people who want to understand the source code of the application they're running.
 
 All contributions, bug reports, bug fixes, documentation improvements, enhancements and ideas are welcome. We [track issues](https://github.com/freqtrade/freqtrade/issues) on [GitHub](https://github.com) and also have a dev channel in [slack](https://join.slack.com/t/highfrequencybot/shared_invite/enQtNjU5ODcwNjI1MDU3LTU1MTgxMjkzNmYxNWE1MDEzYzQ3YmU4N2MwZjUyNjJjODRkMDVkNjg4YTAyZGYzYzlhOTZiMTE4ZjQ4YzM0OGE) where you can ask questions.
 
@@ -153,7 +153,7 @@ In VolumePairList, this implements different methods of sorting, does early vali
 ## Implement a new Exchange (WIP)
 
 !!! Note
-    This section is a Work in Progress and is not a complete guide on how to test a new exchange with FreqTrade.
+    This section is a Work in Progress and is not a complete guide on how to test a new exchange with Freqtrade.
 
 Most exchanges supported by CCXT should work out of the box.
 
@@ -234,7 +234,7 @@ git checkout -b new_release <commitid>
 
 Determine if crucial bugfixes have been made between this commit and the current state, and eventually cherry-pick these.
 
-* Edit `freqtrade/__init__.py` and add the version matching the current date (for example `2019.7` for July 2019). Minor versions can be `2019.7-1` should we need to do a second release that month.
+* Edit `freqtrade/__init__.py` and add the version matching the current date (for example `2019.7` for July 2019). Minor versions can be `2019.7.1` should we need to do a second release that month. Version numbers must follow allowed versions from PEP0440 to avoid failures pushing to pypi.
 * Commit this part
 * push that branch to the remote and create a PR against the master branch
 
@@ -267,11 +267,6 @@ Once the PR against master is merged (best right after merging):
 * Use the version-number specified as tag.
 * Use "master" as reference (this step comes after the above PR is merged).
 * Use the above changelog as release comment (as codeblock)
-
-### After-release
-
-* Update version in develop by postfixing that with `-dev` (`2019.6 -> 2019.6-dev`).
-* Create a PR against develop to update that branch.
 
 ## Releases
 

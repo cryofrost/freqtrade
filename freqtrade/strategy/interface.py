@@ -112,6 +112,9 @@ class IStrategy(ABC):
     dp: Optional[DataProvider] = None
     wallets: Optional[Wallets] = None
 
+    # Definition of plot_config. See plotting documentation for more details.
+    plot_config: Dict = {}
+
     def __init__(self, config: dict) -> None:
         self.config = config
         # Dict to determine if analysis is necessary
@@ -177,7 +180,7 @@ class IStrategy(ABC):
         if pair not in self._pair_locked_until or self._pair_locked_until[pair] < until:
             self._pair_locked_until[pair] = until
 
-    def unlock_pair(self, pair) -> None:
+    def unlock_pair(self, pair: str) -> None:
         """
         Unlocks a pair previously locked using lock_pair.
         Not used by freqtrade itself, but intended to be used if users lock pairs
@@ -361,7 +364,7 @@ class IStrategy(ABC):
         """
         Based on current profit of the trade and configured (trailing) stoploss,
         decides to sell or not
-        :param current_profit: current profit in percent
+        :param current_profit: current profit as ratio
         """
         stop_loss_value = force_stoploss if force_stoploss else self.stoploss
 
@@ -386,9 +389,11 @@ class IStrategy(ABC):
                 trade.adjust_stop_loss(high or current_rate, stop_loss_value)
 
         # evaluate if the stoploss was hit if stoploss is not on exchange
+        # in Dry-Run, this handles stoploss logic as well, as the logic will not be different to
+        # regular stoploss handling.
         if ((self.stoploss is not None) and
             (trade.stop_loss >= current_rate) and
-                (not self.order_types.get('stoploss_on_exchange'))):
+                (not self.order_types.get('stoploss_on_exchange') or self.config['dry_run'])):
 
             sell_type = SellType.STOP_LOSS
 
@@ -422,8 +427,9 @@ class IStrategy(ABC):
 
     def min_roi_reached(self, trade: Trade, current_profit: float, current_time: datetime) -> bool:
         """
-        Based on trade duration, current price and ROI configuration, decides whether bot should
-        sell. Requires current_profit to be in percent!!
+        Based on trade duration, current profit of the trade and ROI configuration,
+        decides whether bot should sell.
+        :param current_profit: current profit as ratio
         :return: True if bot should sell at current rate
         """
         # Check if time matches and current rate is above threshold
@@ -434,7 +440,7 @@ class IStrategy(ABC):
         else:
             return current_profit > roi
 
-    def tickerdata_to_dataframe(self, tickerdata: Dict[str, List]) -> Dict[str, DataFrame]:
+    def tickerdata_to_dataframe(self, tickerdata: Dict[str, DataFrame]) -> Dict[str, DataFrame]:
         """
         Creates a dataframe and populates indicators for given ticker data
         Used by optimize operations only, not during dry / live runs.

@@ -7,14 +7,15 @@ import inspect
 import logging
 from copy import deepcopy
 from datetime import datetime, timezone
-from math import ceil, floor
+from math import ceil
 from random import randint
 from typing import Any, Dict, List, Optional, Tuple
 
 import arrow
 import ccxt
 import ccxt.async_support as ccxt_async
-from ccxt.base.decimal_to_precision import ROUND_DOWN, ROUND_UP
+from ccxt.base.decimal_to_precision import (ROUND_DOWN, ROUND_UP, TICK_SIZE,
+                                            TRUNCATE, decimal_to_precision)
 from pandas import DataFrame
 
 from freqtrade.data.converter import parse_ticker_dataframe
@@ -22,6 +23,10 @@ from freqtrade.exceptions import (DependencyException, InvalidOrderException,
                                   OperationalException, TemporaryError)
 from freqtrade.exchange.common import BAD_EXCHANGES, retrier, retrier_async
 from freqtrade.misc import deep_merge_dicts
+
+
+CcxtModuleType = Any
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +55,7 @@ class Exchange:
     }
     _ft_has: Dict = {}
 
-    def __init__(self, config: dict, validate: bool = True) -> None:
+    def __init__(self, config: Dict[str, Any], validate: bool = True) -> None:
         """
         Initializes this module with the given config,
         it does basic validation whether the specified exchange and pairs are valid.
@@ -60,8 +65,6 @@ class Exchange:
         self._api_async: ccxt_async.Exchange = None
 
         self._config.update(config)
-
-        self._cached_ticker: Dict[str, Any] = {}
 
         # Holds last candle refreshed time of each pair
         self._pairs_last_refresh_time: Dict[Tuple[str, str], int] = {}
@@ -116,6 +119,7 @@ class Exchange:
             self._load_markets()
 
             # Check if all pairs are available
+            self.validate_stakecurrency(config['stake_currency'])
             self.validate_pairs(config['exchange']['pair_whitelist'])
             self.validate_ordertypes(config.get('order_types', {}))
             self.validate_order_time_in_force(config.get('order_time_in_force', {}))
@@ -133,7 +137,7 @@ class Exchange:
         if self._api_async and inspect.iscoroutinefunction(self._api_async.close):
             asyncio.get_event_loop().run_until_complete(self._api_async.close())
 
-    def _init_ccxt(self, exchange_config: dict, ccxt_module=ccxt,
+    def _init_ccxt(self, exchange_config: Dict[str, Any], ccxt_module: CcxtModuleType = ccxt,
                    ccxt_kwargs: dict = None) -> ccxt.Exchange:
         """
         Initialize ccxt with given config and return valid
@@ -188,6 +192,11 @@ class Exchange:
             self._load_markets()
         return self._api.markets
 
+    @property
+    def precisionMode(self) -> str:
+        """exchange ccxt precisionMode"""
+        return self._api.precisionMode
+
     def get_markets(self, base_currencies: List[str] = None, quote_currencies: List[str] = None,
                     pairs_only: bool = False, active_only: bool = False) -> Dict:
         """
@@ -210,13 +219,32 @@ class Exchange:
             markets = {k: v for k, v in markets.items() if market_is_active(v)}
         return markets
 
-    def klines(self, pair_interval: Tuple[str, str], copy=True) -> DataFrame:
+    def get_quote_currencies(self) -> List[str]:
+        """
+        Return a list of supported quote currencies
+        """
+        markets = self.markets
+        return sorted(set([x['quote'] for _, x in markets.items()]))
+
+    def get_pair_quote_currency(self, pair: str) -> str:
+        """
+        Return a pair's quote currency
+        """
+        return self.markets.get(pair, {}).get('quote', '')
+
+    def get_pair_base_currency(self, pair: str) -> str:
+        """
+        Return a pair's quote currency
+        """
+        return self.markets.get(pair, {}).get('base', '')
+
+    def klines(self, pair_interval: Tuple[str, str], copy: bool = True) -> DataFrame:
         if pair_interval in self._klines:
             return self._klines[pair_interval].copy() if copy else self._klines[pair_interval]
         else:
             return DataFrame()
 
-    def set_sandbox(self, api, exchange_config: dict, name: str):
+    def set_sandbox(self, api: ccxt.Exchange, exchange_config: dict, name: str) -> None:
         if exchange_config.get('sandbox'):
             if api.urls.get('test'):
                 api.urls['api'] = api.urls['test']
@@ -226,7 +254,7 @@ class Exchange:
                                      "Please check your config.json")
                 raise OperationalException(f'Exchange {name} does not provide a sandbox api')
 
-    def _load_async_markets(self, reload=False) -> None:
+    def _load_async_markets(self, reload: bool = False) -> None:
         try:
             if self._api_async:
                 asyncio.get_event_loop().run_until_complete(
@@ -259,18 +287,30 @@ class Exchange:
         except ccxt.BaseError:
             logger.exception("Could not reload markets.")
 
+    def validate_stakecurrency(self, stake_currency: str) -> None:
+        """
+        Checks stake-currency against available currencies on the exchange.
+        :param stake_currency: Stake-currency to validate
+        :raise: OperationalException if stake-currency is not available.
+        """
+        quote_currencies = self.get_quote_currencies()
+        if stake_currency not in quote_currencies:
+            raise OperationalException(
+                f"{stake_currency} is not available as stake on {self.name}. "
+                f"Available currencies are: {', '.join(quote_currencies)}")
+
     def validate_pairs(self, pairs: List[str]) -> None:
         """
         Checks if all given pairs are tradable on the current exchange.
-        Raises OperationalException if one pair is not available.
         :param pairs: list of pairs
+        :raise: OperationalException if one pair is not available
         :return: None
         """
 
         if not self.markets:
             logger.warning('Unable to validate pairs (assuming they are correct).')
             return
-
+        invalid_pairs = []
         for pair in pairs:
             # Note: ccxt has BaseCurrency/QuoteCurrency format for pairs
             # TODO: add a support for having coins in BTC/USDT format
@@ -292,8 +332,15 @@ class Exchange:
                 logger.warning(f"Pair {pair} is restricted for some users on this exchange."
                                f"Please check if you are impacted by this restriction "
                                f"on the exchange and eventually remove {pair} from your whitelist.")
+            if (self._config['stake_currency'] and
+                    self.get_pair_quote_currency(pair) != self._config['stake_currency']):
+                invalid_pairs.append(pair)
+        if invalid_pairs:
+            raise OperationalException(
+                f"Stake-currency '{self._config['stake_currency']}' not compatible with "
+                f"pair-whitelist. Please remove the following pairs: {invalid_pairs}")
 
-    def get_valid_pair_combination(self, curr_1, curr_2) -> str:
+    def get_valid_pair_combination(self, curr_1: str, curr_2: str) -> str:
         """
         Get valid pair combination of curr_1 and curr_2 by trying both combinations.
         """
@@ -319,6 +366,10 @@ class Exchange:
             raise OperationalException(
                 f"Invalid ticker interval '{timeframe}'. This exchange supports: {self.timeframes}")
 
+        if timeframe and timeframe_to_minutes(timeframe) < 1:
+            raise OperationalException(
+                f"Timeframes < 1m are currently not supported by Freqtrade.")
+
     def validate_ordertypes(self, order_types: Dict) -> None:
         """
         Checks if order-types configured in strategy/config are supported
@@ -343,7 +394,7 @@ class Exchange:
             raise OperationalException(
                 f'Time in force policies are not supported for {self.name} yet.')
 
-    def validate_required_startup_candles(self, startup_candles) -> None:
+    def validate_required_startup_candles(self, startup_candles: int) -> None:
         """
         Checks if required startup_candles is more than ohlcv_candle_limit.
         Requires a grace-period of 5 candles - so a startup-period up to 494 is allowed by default.
@@ -362,32 +413,49 @@ class Exchange:
         """
         return endpoint in self._api.has and self._api.has[endpoint]
 
-    def symbol_amount_prec(self, pair, amount: float):
+    def amount_to_precision(self, pair: str, amount: float) -> float:
         '''
         Returns the amount to buy or sell to a precision the Exchange accepts
-        Rounded down
+        Reimplementation of ccxt internal methods - ensuring we can test the result is correct
+        based on our definitions.
         '''
         if self.markets[pair]['precision']['amount']:
-            symbol_prec = self.markets[pair]['precision']['amount']
-            big_amount = amount * pow(10, symbol_prec)
-            amount = floor(big_amount) / pow(10, symbol_prec)
+            amount = float(decimal_to_precision(amount, rounding_mode=TRUNCATE,
+                                                precision=self.markets[pair]['precision']['amount'],
+                                                counting_mode=self.precisionMode,
+                                                ))
+
         return amount
 
-    def symbol_price_prec(self, pair, price: float):
+    def price_to_precision(self, pair: str, price: float) -> float:
         '''
-        Returns the price buying or selling with to the precision the Exchange accepts
+        Returns the price rounded up to the precision the Exchange accepts.
+        Partial Reimplementation of ccxt internal method decimal_to_precision(),
+        which does not support rounding up
+        TODO: If ccxt supports ROUND_UP for decimal_to_precision(), we could remove this and
+        align with amount_to_precision().
         Rounds up
         '''
         if self.markets[pair]['precision']['price']:
-            symbol_prec = self.markets[pair]['precision']['price']
-            big_price = price * pow(10, symbol_prec)
-            price = ceil(big_price) / pow(10, symbol_prec)
+            # price = float(decimal_to_precision(price, rounding_mode=ROUND,
+            #                                    precision=self.markets[pair]['precision']['price'],
+            #                                    counting_mode=self.precisionMode,
+            #                                    ))
+            if self.precisionMode == TICK_SIZE:
+                precision = self.markets[pair]['precision']['price']
+                missing = price % precision
+                if missing != 0:
+                    price = price - missing + precision
+            else:
+                symbol_prec = self.markets[pair]['precision']['price']
+                big_price = price * pow(10, symbol_prec)
+                price = ceil(big_price) / pow(10, symbol_prec)
         return price
 
     def dry_run_order(self, pair: str, ordertype: str, side: str, amount: float,
                       rate: float, params: Dict = {}) -> Dict[str, Any]:
         order_id = f'dry_run_{side}_{randint(0, 10**6)}'
-        _amount = self.symbol_amount_prec(pair, amount)
+        _amount = self.amount_to_precision(pair, amount)
         dry_order = {
             "id": order_id,
             'pair': pair,
@@ -413,7 +481,7 @@ class Exchange:
                 "status": "closed",
                 "filled": closed_order["amount"],
                 "remaining": 0
-                })
+            })
         if closed_order["type"] in ["stop_loss_limit"]:
             closed_order["info"].update({"stopPrice": closed_order["price"]})
         self._dry_run_open_orders[closed_order["id"]] = closed_order
@@ -422,13 +490,13 @@ class Exchange:
                      rate: float, params: Dict = {}) -> Dict:
         try:
             # Set the precision for amount and price(rate) as accepted by the exchange
-            amount = self.symbol_amount_prec(pair, amount)
+            amount = self.amount_to_precision(pair, amount)
             needs_price = (ordertype != 'market'
                            or self._api.options.get("createMarketBuyOrderRequiresPrice", False))
-            rate = self.symbol_price_prec(pair, rate) if needs_price else None
+            rate_for_order = self.price_to_precision(pair, rate) if needs_price else None
 
             return self._api.create_order(pair, ordertype, side,
-                                          amount, rate, params)
+                                          amount, rate_for_order, params)
 
         except ccxt.InsufficientFunds as e:
             raise DependencyException(
@@ -447,7 +515,7 @@ class Exchange:
             raise OperationalException(e) from e
 
     def buy(self, pair: str, ordertype: str, amount: float,
-            rate: float, time_in_force) -> Dict:
+            rate: float, time_in_force: str) -> Dict:
 
         if self._config['dry_run']:
             dry_order = self.dry_run_order(pair, ordertype, "buy", amount, rate)
@@ -460,7 +528,7 @@ class Exchange:
         return self.create_order(pair, ordertype, 'buy', amount, rate, params)
 
     def sell(self, pair: str, ordertype: str, amount: float,
-             rate: float, time_in_force='gtc') -> Dict:
+             rate: float, time_in_force: str = 'gtc') -> Dict:
 
         if self._config['dry_run']:
             dry_order = self.dry_run_order(pair, ordertype, "sell", amount, rate)
@@ -472,9 +540,17 @@ class Exchange:
 
         return self.create_order(pair, ordertype, 'sell', amount, rate, params)
 
-    def stoploss_limit(self, pair: str, amount: float, stop_price: float, rate: float) -> Dict:
+    def stoploss_adjust(self, stop_loss: float, order: Dict) -> bool:
         """
-        creates a stoploss limit order.
+        Verify stop_loss against stoploss-order value (limit or price)
+        Returns True if adjustment is necessary.
+        """
+        raise OperationalException(f"stoploss is not implemented for {self.name}.")
+
+    def stoploss(self, pair: str, amount: float, stop_price: float, order_types: Dict) -> Dict:
+        """
+        creates a stoploss order.
+        The precise ordertype is determined by the order_types dict or exchange default.
         Since ccxt does not unify stoploss-limit orders yet, this needs to be implemented in each
         exchange's subclass.
         The exception below should never raise, since we disallow
@@ -482,7 +558,7 @@ class Exchange:
         Note: Changes to this interface need to be applied to all sub-classes too.
         """
 
-        raise OperationalException(f"stoploss_limit is not implemented for {self.name}.")
+        raise OperationalException(f"stoploss is not implemented for {self.name}.")
 
     @retrier
     def get_balance(self, currency: str) -> float:
@@ -532,28 +608,17 @@ class Exchange:
             raise OperationalException(e) from e
 
     @retrier
-    def fetch_ticker(self, pair: str, refresh: Optional[bool] = True) -> dict:
-        if refresh or pair not in self._cached_ticker.keys():
-            try:
-                if pair not in self._api.markets or not self._api.markets[pair].get('active'):
-                    raise DependencyException(f"Pair {pair} not available")
-                data = self._api.fetch_ticker(pair)
-                try:
-                    self._cached_ticker[pair] = {
-                        'bid': float(data['bid']),
-                        'ask': float(data['ask']),
-                    }
-                except KeyError:
-                    logger.debug("Could not cache ticker data for %s", pair)
-                return data
-            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-                raise TemporaryError(
-                    f'Could not load ticker due to {e.__class__.__name__}. Message: {e}') from e
-            except ccxt.BaseError as e:
-                raise OperationalException(e) from e
-        else:
-            logger.info("returning cached ticker-data for %s", pair)
-            return self._cached_ticker[pair]
+    def fetch_ticker(self, pair: str) -> dict:
+        try:
+            if pair not in self._api.markets or not self._api.markets[pair].get('active'):
+                raise DependencyException(f"Pair {pair} not available")
+            data = self._api.fetch_ticker(pair)
+            return data
+        except (ccxt.NetworkError, ccxt.ExchangeError) as e:
+            raise TemporaryError(
+                f'Could not load ticker due to {e.__class__.__name__}. Message: {e}') from e
+        except ccxt.BaseError as e:
+            raise OperationalException(e) from e
 
     def get_historic_ohlcv(self, pair: str, timeframe: str,
                            since_ms: int) -> List:
@@ -681,10 +746,11 @@ class Exchange:
                 f'Exchange {self._api.name} does not support fetching historical candlestick data.'
                 f'Message: {e}') from e
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-            raise TemporaryError(f'Could not load ticker history due to {e.__class__.__name__}. '
-                                 f'Message: {e}') from e
+            raise TemporaryError(f'Could not load ticker history for pair {pair} due to '
+                                 f'{e.__class__.__name__}. Message: {e}') from e
         except ccxt.BaseError as e:
-            raise OperationalException(f'Could not fetch ticker data. Msg: {e}') from e
+            raise OperationalException(f'Could not fetch ticker data for pair {pair}. '
+                                       f'Msg: {e}') from e
 
     @retrier_async
     async def _async_fetch_trades(self, pair: str,
@@ -929,8 +995,8 @@ class Exchange:
             raise OperationalException(e) from e
 
     @retrier
-    def get_fee(self, symbol, type='', side='', amount=1,
-                price=1, taker_or_maker='maker') -> float:
+    def get_fee(self, symbol: str, type: str = '', side: str = '', amount: float = 1,
+                price: float = 1, taker_or_maker: str = 'maker') -> float:
         try:
             # validate that markets are loaded before trying to get fee
             if self._api.markets is None or len(self._api.markets) == 0:
@@ -953,22 +1019,22 @@ def get_exchange_bad_reason(exchange_name: str) -> str:
     return BAD_EXCHANGES.get(exchange_name, "")
 
 
-def is_exchange_known_ccxt(exchange_name: str, ccxt_module=None) -> bool:
+def is_exchange_known_ccxt(exchange_name: str, ccxt_module: CcxtModuleType = None) -> bool:
     return exchange_name in ccxt_exchanges(ccxt_module)
 
 
 def is_exchange_officially_supported(exchange_name: str) -> bool:
-    return exchange_name in ['bittrex', 'binance']
+    return exchange_name in ['bittrex', 'binance', 'kraken']
 
 
-def ccxt_exchanges(ccxt_module=None) -> List[str]:
+def ccxt_exchanges(ccxt_module: CcxtModuleType = None) -> List[str]:
     """
     Return the list of all exchanges known to ccxt
     """
     return ccxt_module.exchanges if ccxt_module is not None else ccxt.exchanges
 
 
-def available_exchanges(ccxt_module=None) -> List[str]:
+def available_exchanges(ccxt_module: CcxtModuleType = None) -> List[str]:
     """
     Return exchanges available to the bot, i.e. non-bad exchanges in the ccxt list
     """
@@ -1028,7 +1094,8 @@ def timeframe_to_next_date(timeframe: str, date: datetime = None) -> datetime:
     return datetime.fromtimestamp(new_timestamp, tz=timezone.utc)
 
 
-def symbol_is_pair(market_symbol: str, base_currency: str = None, quote_currency: str = None):
+def symbol_is_pair(market_symbol: str, base_currency: str = None,
+                   quote_currency: str = None) -> bool:
     """
     Check if the market symbol is a pair, i.e. that its symbol consists of the base currency and the
     quote currency separated by '/' character. If base_currency and/or quote_currency is passed,
@@ -1041,7 +1108,7 @@ def symbol_is_pair(market_symbol: str, base_currency: str = None, quote_currency
             (symbol_parts[1] == quote_currency if quote_currency else len(symbol_parts[1]) > 0))
 
 
-def market_is_active(market):
+def market_is_active(market: Dict) -> bool:
     """
     Return True if the market is active.
     """

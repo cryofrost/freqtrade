@@ -96,6 +96,8 @@ class Configuration:
         # Keep a copy of the original configuration file
         config['original_config'] = deepcopy(config)
 
+        self._process_logging_options(config)
+
         self._process_runmode(config)
 
         self._process_common_options(config)
@@ -146,8 +148,6 @@ class Configuration:
 
     def _process_common_options(self, config: Dict[str, Any]) -> None:
 
-        self._process_logging_options(config)
-
         # Set strategy if not specified in config and or if it's non default
         if self.args.get("strategy") or not config.get('strategy'):
             config.update({'strategy': self.args.get("strategy")})
@@ -166,10 +166,6 @@ class Configuration:
         # Support for sd_notify
         if 'sd_notify' in self.args and self.args["sd_notify"]:
             config['internals'].update({'sd_notify': True})
-
-        self._args_to_config(config, argname='dry_run',
-                             logstring='Parameter --dry-run detected, '
-                             'overriding dry_run to: {} ...')
 
     def _process_datadir_options(self, config: Dict[str, Any]) -> None:
         """
@@ -310,6 +306,30 @@ class Configuration:
         self._args_to_config(config, argname='hyperopt_list_profitable',
                              logstring='Parameter --profitable detected: {}')
 
+        self._args_to_config(config, argname='hyperopt_list_min_trades',
+                             logstring='Parameter --min-trades detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_max_trades',
+                             logstring='Parameter --max-trades detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_min_avg_time',
+                             logstring='Parameter --min-avg-time detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_max_avg_time',
+                             logstring='Parameter --max-avg-time detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_min_avg_profit',
+                             logstring='Parameter --min-avg-profit detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_max_avg_profit',
+                             logstring='Parameter --max-avg-profit detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_min_total_profit',
+                             logstring='Parameter --min-total-profit detected: {}')
+
+        self._args_to_config(config, argname='hyperopt_list_max_total_profit',
+                             logstring='Parameter --max-total-profit detected: {}')
+
         self._args_to_config(config, argname='hyperopt_list_no_details',
                              logstring='Parameter --no-details detected: {}')
 
@@ -340,15 +360,26 @@ class Configuration:
 
         self._args_to_config(config, argname='days',
                              logstring='Detected --days: {}')
+
         self._args_to_config(config, argname='download_trades',
                              logstring='Detected --dl-trades: {}')
 
+        self._args_to_config(config, argname='dataformat_ohlcv',
+                             logstring='Using "{}" to store OHLCV data.')
+
+        self._args_to_config(config, argname='dataformat_trades',
+                             logstring='Using "{}" to store trades data.')
+
     def _process_runmode(self, config: Dict[str, Any]) -> None:
+
+        self._args_to_config(config, argname='dry_run',
+                             logstring='Parameter --dry-run detected, '
+                             'overriding dry_run to: {} ...')
 
         if not self.runmode:
             # Handle real mode, infer dry/live from config
             self.runmode = RunMode.DRY_RUN if config.get('dry_run', True) else RunMode.LIVE
-            logger.info(f"Runmode set to {self.runmode}.")
+            logger.info(f"Runmode set to {self.runmode.value}.")
 
         config.update({'runmode': self.runmode})
 

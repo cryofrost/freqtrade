@@ -9,20 +9,24 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional
 
+import arrow
 from pandas import DataFrame
-from tabulate import tabulate
 
 from freqtrade.configuration import (TimeRange, remove_credentials,
                                      validate_config_consistency)
 from freqtrade.data import history
+from freqtrade.data.converter import trim_dataframe
 from freqtrade.data.dataprovider import DataProvider
 from freqtrade.exceptions import OperationalException
 from freqtrade.exchange import timeframe_to_minutes, timeframe_to_seconds
 from freqtrade.misc import file_dump_json
+from freqtrade.optimize.optimize_reports import (
+    generate_text_table, generate_text_table_sell_reason,
+    generate_text_table_strategy)
 from freqtrade.persistence import Trade
 from freqtrade.resolvers import ExchangeResolver, StrategyResolver
 from freqtrade.state import RunMode
-from freqtrade.strategy.interface import IStrategy, SellType
+from freqtrade.strategy.interface import IStrategy, SellCheckTuple, SellType
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +119,7 @@ class Backtesting:
             timerange=timerange,
             startup_candles=self.required_startup,
             fail_without_data=True,
+            data_format=self.config.get('dataformat_ohlcv', 'json'),
         )
 
         min_date, max_date = history.get_timerange(data)
@@ -128,96 +133,6 @@ class Backtesting:
                                             self.required_startup, min_date)
 
         return data, timerange
-
-    def _generate_text_table(self, data: Dict[str, Dict], results: DataFrame,
-                             skip_nan: bool = False) -> str:
-        """
-        Generates and returns a text table for the given backtest data and the results dataframe
-        :return: pretty printed table with tabulate as str
-        """
-        stake_currency = str(self.config.get('stake_currency'))
-        max_open_trades = self.config.get('max_open_trades')
-
-        floatfmt = ('s', 'd', '.2f', '.2f', '.8f', '.2f', 'd', '.1f', '.1f')
-        tabular_data = []
-        headers = ['pair', 'buy count', 'avg profit %', 'cum profit %',
-                   'tot profit ' + stake_currency, 'tot profit %', 'avg duration',
-                   'profit', 'loss']
-        for pair in data:
-            result = results[results.pair == pair]
-            if skip_nan and result.profit_abs.isnull().all():
-                continue
-
-            tabular_data.append([
-                pair,
-                len(result.index),
-                result.profit_percent.mean() * 100.0,
-                result.profit_percent.sum() * 100.0,
-                result.profit_abs.sum(),
-                result.profit_percent.sum() * 100.0 / max_open_trades,
-                str(timedelta(
-                    minutes=round(result.trade_duration.mean()))) if not result.empty else '0:00',
-                len(result[result.profit_abs > 0]),
-                len(result[result.profit_abs < 0])
-            ])
-
-        # Append Total
-        tabular_data.append([
-            'TOTAL',
-            len(results.index),
-            results.profit_percent.mean() * 100.0,
-            results.profit_percent.sum() * 100.0,
-            results.profit_abs.sum(),
-            results.profit_percent.sum() * 100.0 / max_open_trades,
-            str(timedelta(
-                minutes=round(results.trade_duration.mean()))) if not results.empty else '0:00',
-            len(results[results.profit_abs > 0]),
-            len(results[results.profit_abs < 0])
-        ])
-        # Ignore type as floatfmt does allow tuples but mypy does not know that
-        return tabulate(tabular_data, headers=headers,
-                        floatfmt=floatfmt, tablefmt="pipe")  # type: ignore
-
-    def _generate_text_table_sell_reason(self, data: Dict[str, Dict], results: DataFrame) -> str:
-        """
-        Generate small table outlining Backtest results
-        """
-        tabular_data = []
-        headers = ['Sell Reason', 'Count', 'Profit', 'Loss']
-        for reason, count in results['sell_reason'].value_counts().iteritems():
-            profit = len(results[(results['sell_reason'] == reason) & (results['profit_abs'] >= 0)])
-            loss = len(results[(results['sell_reason'] == reason) & (results['profit_abs'] < 0)])
-            tabular_data.append([reason.value, count, profit, loss])
-        return tabulate(tabular_data, headers=headers, tablefmt="pipe")
-
-    def _generate_text_table_strategy(self, all_results: dict) -> str:
-        """
-        Generate summary table per strategy
-        """
-        stake_currency = str(self.config.get('stake_currency'))
-        max_open_trades = self.config.get('max_open_trades')
-
-        floatfmt = ('s', 'd', '.2f', '.2f', '.8f', '.2f', 'd', '.1f', '.1f')
-        tabular_data = []
-        headers = ['Strategy', 'buy count', 'avg profit %', 'cum profit %',
-                   'tot profit ' + stake_currency, 'tot profit %', 'avg duration',
-                   'profit', 'loss']
-        for strategy, results in all_results.items():
-            tabular_data.append([
-                strategy,
-                len(results.index),
-                results.profit_percent.mean() * 100.0,
-                results.profit_percent.sum() * 100.0,
-                results.profit_abs.sum(),
-                results.profit_percent.sum() * 100.0 / max_open_trades,
-                str(timedelta(
-                    minutes=round(results.trade_duration.mean()))) if not results.empty else '0:00',
-                len(results[results.profit_abs > 0]),
-                len(results[results.profit_abs < 0])
-            ])
-        # Ignore type as floatfmt does allow tuples but mypy does not know that
-        return tabulate(tabular_data, headers=headers,
-                        floatfmt=floatfmt, tablefmt="pipe")  # type: ignore
 
     def _store_backtest_result(self, recordfilename: Path, results: DataFrame,
                                strategyname: Optional[str] = None) -> None:
@@ -236,7 +151,7 @@ class Backtesting:
             logger.info(f'Dumping backtest results to {recordfilename}')
             file_dump_json(recordfilename, records)
 
-    def _get_ticker_list(self, processed) -> Dict[str, DataFrame]:
+    def _get_ticker_list(self, processed: Dict) -> Dict[str, DataFrame]:
         """
         Helper function to convert a processed tickerlist into a list for performance reasons.
 
@@ -263,7 +178,8 @@ class Backtesting:
             ticker[pair] = [x for x in ticker_data.itertuples()]
         return ticker
 
-    def _get_close_rate(self, sell_row, trade: Trade, sell, trade_dur) -> float:
+    def _get_close_rate(self, sell_row, trade: Trade, sell: SellCheckTuple,
+                        trade_dur: int) -> float:
         """
         Get close rate for backtesting result
         """
@@ -367,30 +283,28 @@ class Backtesting:
             return bt_res
         return None
 
-    def backtest(self, args: Dict) -> DataFrame:
+    def backtest(self, processed: Dict, stake_amount: float,
+                 start_date: arrow.Arrow, end_date: arrow.Arrow,
+                 max_open_trades: int = 0, position_stacking: bool = False) -> DataFrame:
         """
-        Implements backtesting functionality
+        Implement backtesting functionality
 
         NOTE: This method is used by Hyperopt at each iteration. Please keep it optimized.
         Of course try to not have ugly code. By some accessor are sometime slower than functions.
-        Avoid, logging on this method
+        Avoid extensive logging in this method and functions it calls.
 
-        :param args: a dict containing:
-            stake_amount: btc amount to use for each trade
-            processed: a processed dictionary with format {pair, data}
-            max_open_trades: maximum number of concurrent trades (default: 0, disabled)
-            position_stacking: do we allow position stacking? (default: False)
-        :return: DataFrame
+        :param processed: a processed dictionary with format {pair, data}
+        :param stake_amount: amount to use for each trade
+        :param start_date: backtesting timerange start datetime
+        :param end_date: backtesting timerange end datetime
+        :param max_open_trades: maximum number of concurrent trades, <= 0 means unlimited
+        :param position_stacking: do we allow position stacking?
+        :return: DataFrame with trades (results of backtesting)
         """
-        # Arguments are long and noisy, so this is commented out.
-        # Uncomment if you need to debug the backtest() method.
-#        logger.debug(f"Start backtest, args: {args}")
-        processed = args['processed']
-        stake_amount = args['stake_amount']
-        max_open_trades = args.get('max_open_trades', 0)
-        position_stacking = args.get('position_stacking', False)
-        start_date = args['start_date']
-        end_date = args['end_date']
+        logger.debug(f"Run backtest, stake_amount: {stake_amount}, "
+                     f"start_date: {start_date}, end_date: {end_date}, "
+                     f"max_open_trades: {max_open_trades}, position_stacking: {position_stacking}"
+                     )
         trades = []
         trade_count_lock: Dict = {}
 
@@ -457,18 +371,21 @@ class Backtesting:
 
     def start(self) -> None:
         """
-        Run a backtesting end-to-end
+        Run backtesting end-to-end
         :return: None
         """
         data: Dict[str, Any] = {}
+
         logger.info('Using stake_currency: %s ...', self.config['stake_currency'])
         logger.info('Using stake_amount: %s ...', self.config['stake_amount'])
+
         # Use max_open_trades in backtesting, except --disable-max-market-positions is set
         if self.config.get('use_max_market_positions', True):
             max_open_trades = self.config['max_open_trades']
         else:
             logger.info('Ignoring max_open_trades (--disable-max-market-positions was used) ...')
             max_open_trades = 0
+        position_stacking = self.config.get('position_stacking', False)
 
         data, timerange = self.load_bt_data()
 
@@ -482,7 +399,7 @@ class Backtesting:
 
             # Trim startup period from analyzed dataframe
             for pair, df in preprocessed.items():
-                preprocessed[pair] = history.trim_dataframe(df, timerange)
+                preprocessed[pair] = trim_dataframe(df, timerange)
             min_date, max_date = history.get_timerange(preprocessed)
 
             logger.info(
@@ -491,14 +408,12 @@ class Backtesting:
             )
             # Execute backtest and print results
             all_results[self.strategy.get_strategy_name()] = self.backtest(
-                {
-                    'stake_amount': self.config.get('stake_amount'),
-                    'processed': preprocessed,
-                    'max_open_trades': max_open_trades,
-                    'position_stacking': self.config.get('position_stacking', False),
-                    'start_date': min_date,
-                    'end_date': max_date,
-                }
+                processed=preprocessed,
+                stake_amount=self.config['stake_amount'],
+                start_date=min_date,
+                end_date=max_date,
+                max_open_trades=max_open_trades,
+                position_stacking=position_stacking,
             )
 
         for strategy, results in all_results.items():
@@ -508,17 +423,37 @@ class Backtesting:
                                             strategy if len(self.strategylist) > 1 else None)
 
             print(f"Result for strategy {strategy}")
-            print(' BACKTESTING REPORT '.center(133, '='))
-            print(self._generate_text_table(data, results))
+            table = generate_text_table(data, stake_currency=self.config['stake_currency'],
+                                        max_open_trades=self.config['max_open_trades'],
+                                        results=results)
+            if isinstance(table, str):
+                print(' BACKTESTING REPORT '.center(len(table.splitlines()[0]), '='))
+            print(table)
 
-            print(' SELL REASON STATS '.center(133, '='))
-            print(self._generate_text_table_sell_reason(data, results))
+            table = generate_text_table_sell_reason(data,
+                                                    stake_currency=self.config['stake_currency'],
+                                                    max_open_trades=self.config['max_open_trades'],
+                                                    results=results)
+            if isinstance(table, str):
+                print(' SELL REASON STATS '.center(len(table.splitlines()[0]), '='))
+            print(table)
 
-            print(' LEFT OPEN TRADES REPORT '.center(133, '='))
-            print(self._generate_text_table(data, results.loc[results.open_at_end], True))
+            table = generate_text_table(data,
+                                        stake_currency=self.config['stake_currency'],
+                                        max_open_trades=self.config['max_open_trades'],
+                                        results=results.loc[results.open_at_end], skip_nan=True)
+            if isinstance(table, str):
+                print(' LEFT OPEN TRADES REPORT '.center(len(table.splitlines()[0]), '='))
+            print(table)
+            if isinstance(table, str):
+                print('=' * len(table.splitlines()[0]))
             print()
         if len(all_results) > 1:
             # Print Strategy summary table
-            print(' Strategy Summary '.center(133, '='))
-            print(self._generate_text_table_strategy(all_results))
+            table = generate_text_table_strategy(self.config['stake_currency'],
+                                                 self.config['max_open_trades'],
+                                                 all_results=all_results)
+            print(' STRATEGY SUMMARY '.center(len(table.splitlines()[0]), '='))
+            print(table)
+            print('=' * len(table.splitlines()[0]))
             print('\nFor more details, please look at the detail tables above')

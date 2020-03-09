@@ -2,6 +2,7 @@
 import locale
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List
 from unittest.mock import MagicMock, PropertyMock
 
 import pandas as pd
@@ -9,10 +10,10 @@ import pytest
 from arrow import Arrow
 from filelock import Timeout
 
+from freqtrade.commands.optimize_commands import (setup_optimize_configuration,
+                                                  start_hyperopt)
+from freqtrade.data.history import load_data
 from freqtrade.exceptions import OperationalException
-from freqtrade.data.converter import parse_ticker_dataframe
-from freqtrade.data.history import load_tickerdata_file
-from freqtrade.optimize import setup_configuration, start_hyperopt
 from freqtrade.optimize.default_hyperopt import DefaultHyperOpt
 from freqtrade.optimize.default_hyperopt_loss import DefaultHyperOptLoss
 from freqtrade.optimize.hyperopt import Hyperopt
@@ -42,13 +43,19 @@ def hyperopt_results():
             'profit_percent': [-0.1, 0.2, 0.3],
             'profit_abs': [-0.2, 0.4, 0.6],
             'trade_duration': [10, 30, 10],
-            'sell_reason': [SellType.STOP_LOSS, SellType.ROI, SellType.ROI]
+            'sell_reason': [SellType.STOP_LOSS, SellType.ROI, SellType.ROI],
+            'close_time':
+            [
+                datetime(2019, 1, 1, 9, 26, 3, 478039),
+                datetime(2019, 2, 1, 9, 26, 3, 478039),
+                datetime(2019, 3, 1, 9, 26, 3, 478039)
+            ]
         }
     )
 
 
 # Functions for recurrent object patching
-def create_trials(mocker, hyperopt, testdatadir) -> None:
+def create_trials(mocker, hyperopt, testdatadir) -> List[Dict]:
     """
     When creating trials, mock the hyperopt Trials so that *by default*
       - we don't create any pickle'd files in the filesystem
@@ -77,7 +84,7 @@ def test_setup_hyperopt_configuration_without_arguments(mocker, default_conf, ca
         '--hyperopt', 'DefaultHyperOpt',
     ]
 
-    config = setup_configuration(get_args(args), RunMode.HYPEROPT)
+    config = setup_optimize_configuration(get_args(args), RunMode.HYPEROPT)
     assert 'max_open_trades' in config
     assert 'stake_currency' in config
     assert 'stake_amount' in config
@@ -117,7 +124,7 @@ def test_setup_hyperopt_configuration_with_arguments(mocker, default_conf, caplo
         '--print-all'
     ]
 
-    config = setup_configuration(get_args(args), RunMode.HYPEROPT)
+    config = setup_optimize_configuration(get_args(args), RunMode.HYPEROPT)
     assert 'max_open_trades' in config
     assert 'stake_currency' in config
     assert 'stake_amount' in config
@@ -222,10 +229,10 @@ def test_start_not_installed(mocker, default_conf, caplog, import_fails) -> None
         '--hyperopt', 'DefaultHyperOpt',
         '--epochs', '5'
     ]
-    args = get_args(args)
+    pargs = get_args(args)
 
     with pytest.raises(OperationalException, match=r"Please ensure that the hyperopt dependencies"):
-        start_hyperopt(args)
+        start_hyperopt(pargs)
 
 
 def test_start(mocker, default_conf, caplog) -> None:
@@ -240,8 +247,8 @@ def test_start(mocker, default_conf, caplog) -> None:
         '--hyperopt', 'DefaultHyperOpt',
         '--epochs', '5'
     ]
-    args = get_args(args)
-    start_hyperopt(args)
+    pargs = get_args(args)
+    start_hyperopt(pargs)
 
     assert log_has('Starting freqtrade in Hyperopt mode', caplog)
     assert start_mock.call_count == 1
@@ -263,9 +270,9 @@ def test_start_no_data(mocker, default_conf, caplog) -> None:
         '--hyperopt', 'DefaultHyperOpt',
         '--epochs', '5'
     ]
-    args = get_args(args)
+    pargs = get_args(args)
     with pytest.raises(OperationalException, match='No data found. Terminating.'):
-        start_hyperopt(args)
+        start_hyperopt(pargs)
 
 
 def test_start_filelock(mocker, default_conf, caplog) -> None:
@@ -280,16 +287,19 @@ def test_start_filelock(mocker, default_conf, caplog) -> None:
         '--hyperopt', 'DefaultHyperOpt',
         '--epochs', '5'
     ]
-    args = get_args(args)
-    start_hyperopt(args)
+    pargs = get_args(args)
+    start_hyperopt(pargs)
     assert log_has("Another running instance of freqtrade Hyperopt detected.", caplog)
 
 
 def test_loss_calculation_prefer_correct_trade_count(default_conf, hyperopt_results) -> None:
     hl = HyperOptLossResolver.load_hyperoptloss(default_conf)
-    correct = hl.hyperopt_loss_function(hyperopt_results, 600)
-    over = hl.hyperopt_loss_function(hyperopt_results, 600 + 100)
-    under = hl.hyperopt_loss_function(hyperopt_results, 600 - 100)
+    correct = hl.hyperopt_loss_function(hyperopt_results, 600,
+                                        datetime(2019, 1, 1), datetime(2019, 5, 1))
+    over = hl.hyperopt_loss_function(hyperopt_results, 600 + 100,
+                                     datetime(2019, 1, 1), datetime(2019, 5, 1))
+    under = hl.hyperopt_loss_function(hyperopt_results, 600 - 100,
+                                      datetime(2019, 1, 1), datetime(2019, 5, 1))
     assert over > correct
     assert under > correct
 
@@ -299,8 +309,10 @@ def test_loss_calculation_prefer_shorter_trades(default_conf, hyperopt_results) 
     resultsb.loc[1, 'trade_duration'] = 20
 
     hl = HyperOptLossResolver.load_hyperoptloss(default_conf)
-    longer = hl.hyperopt_loss_function(hyperopt_results, 100)
-    shorter = hl.hyperopt_loss_function(resultsb, 100)
+    longer = hl.hyperopt_loss_function(hyperopt_results, 100,
+                                       datetime(2019, 1, 1), datetime(2019, 5, 1))
+    shorter = hl.hyperopt_loss_function(resultsb, 100,
+                                        datetime(2019, 1, 1), datetime(2019, 5, 1))
     assert shorter < longer
 
 
@@ -311,9 +323,12 @@ def test_loss_calculation_has_limited_profit(default_conf, hyperopt_results) -> 
     results_under['profit_percent'] = hyperopt_results['profit_percent'] / 2
 
     hl = HyperOptLossResolver.load_hyperoptloss(default_conf)
-    correct = hl.hyperopt_loss_function(hyperopt_results, 600)
-    over = hl.hyperopt_loss_function(results_over, 600)
-    under = hl.hyperopt_loss_function(results_under, 600)
+    correct = hl.hyperopt_loss_function(hyperopt_results, 600,
+                                        datetime(2019, 1, 1), datetime(2019, 5, 1))
+    over = hl.hyperopt_loss_function(results_over, 600,
+                                     datetime(2019, 1, 1), datetime(2019, 5, 1))
+    under = hl.hyperopt_loss_function(results_under, 600,
+                                      datetime(2019, 1, 1), datetime(2019, 5, 1))
     assert over < correct
     assert under > correct
 
@@ -325,6 +340,60 @@ def test_sharpe_loss_prefers_higher_profits(default_conf, hyperopt_results) -> N
     results_under['profit_percent'] = hyperopt_results['profit_percent'] / 2
 
     default_conf.update({'hyperopt_loss': 'SharpeHyperOptLoss'})
+    hl = HyperOptLossResolver.load_hyperoptloss(default_conf)
+    correct = hl.hyperopt_loss_function(hyperopt_results, len(hyperopt_results),
+                                        datetime(2019, 1, 1), datetime(2019, 5, 1))
+    over = hl.hyperopt_loss_function(results_over, len(hyperopt_results),
+                                     datetime(2019, 1, 1), datetime(2019, 5, 1))
+    under = hl.hyperopt_loss_function(results_under, len(hyperopt_results),
+                                      datetime(2019, 1, 1), datetime(2019, 5, 1))
+    assert over < correct
+    assert under > correct
+
+
+def test_sharpe_loss_daily_prefers_higher_profits(default_conf, hyperopt_results) -> None:
+    results_over = hyperopt_results.copy()
+    results_over['profit_percent'] = hyperopt_results['profit_percent'] * 2
+    results_under = hyperopt_results.copy()
+    results_under['profit_percent'] = hyperopt_results['profit_percent'] / 2
+
+    default_conf.update({'hyperopt_loss': 'SharpeHyperOptLossDaily'})
+    hl = HyperOptLossResolver.load_hyperoptloss(default_conf)
+    correct = hl.hyperopt_loss_function(hyperopt_results, len(hyperopt_results),
+                                        datetime(2019, 1, 1), datetime(2019, 5, 1))
+    over = hl.hyperopt_loss_function(results_over, len(hyperopt_results),
+                                     datetime(2019, 1, 1), datetime(2019, 5, 1))
+    under = hl.hyperopt_loss_function(results_under, len(hyperopt_results),
+                                      datetime(2019, 1, 1), datetime(2019, 5, 1))
+    assert over < correct
+    assert under > correct
+
+
+def test_sortino_loss_prefers_higher_profits(default_conf, hyperopt_results) -> None:
+    results_over = hyperopt_results.copy()
+    results_over['profit_percent'] = hyperopt_results['profit_percent'] * 2
+    results_under = hyperopt_results.copy()
+    results_under['profit_percent'] = hyperopt_results['profit_percent'] / 2
+
+    default_conf.update({'hyperopt_loss': 'SortinoHyperOptLoss'})
+    hl = HyperOptLossResolver.load_hyperoptloss(default_conf)
+    correct = hl.hyperopt_loss_function(hyperopt_results, len(hyperopt_results),
+                                        datetime(2019, 1, 1), datetime(2019, 5, 1))
+    over = hl.hyperopt_loss_function(results_over, len(hyperopt_results),
+                                     datetime(2019, 1, 1), datetime(2019, 5, 1))
+    under = hl.hyperopt_loss_function(results_under, len(hyperopt_results),
+                                      datetime(2019, 1, 1), datetime(2019, 5, 1))
+    assert over < correct
+    assert under > correct
+
+
+def test_sortino_loss_daily_prefers_higher_profits(default_conf, hyperopt_results) -> None:
+    results_over = hyperopt_results.copy()
+    results_over['profit_percent'] = hyperopt_results['profit_percent'] * 2
+    results_under = hyperopt_results.copy()
+    results_under['profit_percent'] = hyperopt_results['profit_percent'] / 2
+
+    default_conf.update({'hyperopt_loss': 'SortinoHyperOptLossDaily'})
     hl = HyperOptLossResolver.load_hyperoptloss(default_conf)
     correct = hl.hyperopt_loss_function(hyperopt_results, len(hyperopt_results),
                                         datetime(2019, 1, 1), datetime(2019, 5, 1))
@@ -357,17 +426,27 @@ def test_onlyprofit_loss_prefers_higher_profits(default_conf, hyperopt_results) 
 def test_log_results_if_loss_improves(hyperopt, capsys) -> None:
     hyperopt.current_best_loss = 2
     hyperopt.total_epochs = 2
+
     hyperopt.print_results(
         {
-            'is_best': True,
             'loss': 1,
+            'results_metrics':
+                {
+                    'trade_count': 1,
+                    'avg_profit': 0.1,
+                    'total_profit': 0.001,
+                    'profit': 1.0,
+                    'duration': 20.0
+                },
+            'total_profit': 0,
             'current_epoch': 2,  # This starts from 1 (in a human-friendly manner)
-            'results_explanation': 'foo.',
-            'is_initial_point': False
+            'is_initial_point': False,
+            'is_best': True
         }
     )
     out, err = capsys.readouterr()
-    assert '    2/2: foo. Objective: 1.00000' in out
+    assert all(x in out
+               for x in ["Best", "2/2", " 1", "0.10%", "0.00100000 BTC    (1.00%)", "20.0 m"])
 
 
 def test_no_log_if_loss_does_not_improve(hyperopt, caplog) -> None:
@@ -389,13 +468,11 @@ def test_save_trials_saves_trials(mocker, hyperopt, testdatadir, caplog) -> None
 
     hyperopt.trials = trials
     hyperopt.save_trials(final=True)
-    assert log_has("Saving 1 epoch.", caplog)
     assert log_has(f"1 epoch saved to '{trials_file}'.", caplog)
     mock_dump.assert_called_once()
 
     hyperopt.trials = trials + trials
     hyperopt.save_trials(final=True)
-    assert log_has("Saving 2 epochs.", caplog)
     assert log_has(f"2 epochs saved to '{trials_file}'.", caplog)
 
 
@@ -433,8 +510,18 @@ def test_start_calls_optimizer(mocker, default_conf, caplog, capsys) -> None:
 
     parallel = mocker.patch(
         'freqtrade.optimize.hyperopt.Hyperopt.run_optimizer_parallel',
-        MagicMock(return_value=[{'loss': 1, 'results_explanation': 'foo result',
-                                 'params': {'buy': {}, 'sell': {}, 'roi': {}, 'stoploss': 0.0}}])
+        MagicMock(return_value=[{
+            'loss': 1, 'results_explanation': 'foo result',
+            'params': {'buy': {}, 'sell': {}, 'roi': {}, 'stoploss': 0.0},
+            'results_metrics':
+            {
+                'trade_count': 1,
+                'avg_profit': 0.1,
+                'total_profit': 0.001,
+                'profit': 1.0,
+                'duration': 20.0
+            },
+        }])
     )
     patch_exchange(mocker)
     # Co-test loading ticker-interval from strategy
@@ -543,9 +630,7 @@ def test_has_space(hyperopt, spaces, expected_results):
 
 
 def test_populate_indicators(hyperopt, testdatadir) -> None:
-    tick = load_tickerdata_file(testdatadir, 'UNITTEST/BTC', '1m')
-    tickerlist = {'UNITTEST/BTC': parse_ticker_dataframe(tick, '1m', pair="UNITTEST/BTC",
-                                                         fill_missing=True)}
+    tickerlist = load_data(testdatadir, '1m', ['UNITTEST/BTC'], fill_up_missing=True)
     dataframes = hyperopt.backtesting.strategy.tickerdata_to_dataframe(tickerlist)
     dataframe = hyperopt.custom_hyperopt.populate_indicators(dataframes['UNITTEST/BTC'],
                                                              {'pair': 'UNITTEST/BTC'})
@@ -557,9 +642,7 @@ def test_populate_indicators(hyperopt, testdatadir) -> None:
 
 
 def test_buy_strategy_generator(hyperopt, testdatadir) -> None:
-    tick = load_tickerdata_file(testdatadir, 'UNITTEST/BTC', '1m')
-    tickerlist = {'UNITTEST/BTC': parse_ticker_dataframe(tick, '1m', pair="UNITTEST/BTC",
-                                                         fill_missing=True)}
+    tickerlist = load_data(testdatadir, '1m', ['UNITTEST/BTC'], fill_up_missing=True)
     dataframes = hyperopt.backtesting.strategy.tickerdata_to_dataframe(tickerlist)
     dataframe = hyperopt.custom_hyperopt.populate_indicators(dataframes['UNITTEST/BTC'],
                                                              {'pair': 'UNITTEST/BTC'})
@@ -732,11 +815,23 @@ def test_print_json_spaces_all(mocker, default_conf, caplog, capsys) -> None:
 
     parallel = mocker.patch(
         'freqtrade.optimize.hyperopt.Hyperopt.run_optimizer_parallel',
-        MagicMock(return_value=[{'loss': 1, 'results_explanation': 'foo result', 'params': {},
-                                 'params_details': {'buy': {'mfi-value': None},
-                                                    'sell': {'sell-mfi-value': None},
-                                                    'roi': {}, 'stoploss': {'stoploss': None},
-                                                    'trailing': {'trailing_stop': None}}}])
+        MagicMock(return_value=[{
+            'loss': 1, 'results_explanation': 'foo result', 'params': {},
+            'params_details': {
+                'buy': {'mfi-value': None},
+                'sell': {'sell-mfi-value': None},
+                'roi': {}, 'stoploss': {'stoploss': None},
+                'trailing': {'trailing_stop': None}
+            },
+            'results_metrics':
+            {
+                'trade_count': 1,
+                'avg_profit': 0.1,
+                'total_profit': 0.001,
+                'profit': 1.0,
+                'duration': 20.0
+            }
+        }])
     )
     patch_exchange(mocker)
 
@@ -758,7 +853,11 @@ def test_print_json_spaces_all(mocker, default_conf, caplog, capsys) -> None:
     parallel.assert_called_once()
 
     out, err = capsys.readouterr()
-    assert '{"params":{"mfi-value":null,"sell-mfi-value":null},"minimal_roi":{},"stoploss":null,"trailing_stop":null}' in out  # noqa: E501
+    result_str = (
+        '{"params":{"mfi-value":null,"sell-mfi-value":null},"minimal_roi"'
+        ':{},"stoploss":null,"trailing_stop":null}'
+    )
+    assert result_str in out  # noqa: E501
     assert dumper.called
     # Should be called twice, once for tickerdata, once to save evaluations
     assert dumper.call_count == 2
@@ -775,10 +874,22 @@ def test_print_json_spaces_default(mocker, default_conf, caplog, capsys) -> None
 
     parallel = mocker.patch(
         'freqtrade.optimize.hyperopt.Hyperopt.run_optimizer_parallel',
-        MagicMock(return_value=[{'loss': 1, 'results_explanation': 'foo result', 'params': {},
-                                 'params_details': {'buy': {'mfi-value': None},
-                                                    'sell': {'sell-mfi-value': None},
-                                                    'roi': {}, 'stoploss': {'stoploss': None}}}])
+        MagicMock(return_value=[{
+            'loss': 1, 'results_explanation': 'foo result', 'params': {},
+            'params_details': {
+                'buy': {'mfi-value': None},
+                'sell': {'sell-mfi-value': None},
+                'roi': {}, 'stoploss': {'stoploss': None}
+            },
+            'results_metrics':
+            {
+                'trade_count': 1,
+                'avg_profit': 0.1,
+                'total_profit': 0.001,
+                'profit': 1.0,
+                'duration': 20.0
+            }
+        }])
     )
     patch_exchange(mocker)
 
@@ -817,8 +928,18 @@ def test_print_json_spaces_roi_stoploss(mocker, default_conf, caplog, capsys) ->
 
     parallel = mocker.patch(
         'freqtrade.optimize.hyperopt.Hyperopt.run_optimizer_parallel',
-        MagicMock(return_value=[{'loss': 1, 'results_explanation': 'foo result', 'params': {},
-                                 'params_details': {'roi': {}, 'stoploss': {'stoploss': None}}}])
+        MagicMock(return_value=[{
+            'loss': 1, 'results_explanation': 'foo result', 'params': {},
+            'params_details': {'roi': {}, 'stoploss': {'stoploss': None}},
+            'results_metrics':
+            {
+                'trade_count': 1,
+                'avg_profit': 0.1,
+                'total_profit': 0.001,
+                'profit': 1.0,
+                'duration': 20.0
+            }
+        }])
     )
     patch_exchange(mocker)
 
@@ -858,7 +979,16 @@ def test_simplified_interface_roi_stoploss(mocker, default_conf, caplog, capsys)
     parallel = mocker.patch(
         'freqtrade.optimize.hyperopt.Hyperopt.run_optimizer_parallel',
         MagicMock(return_value=[{
-            'loss': 1, 'results_explanation': 'foo result', 'params': {'stoploss': 0.0}}])
+            'loss': 1, 'results_explanation': 'foo result', 'params': {'stoploss': 0.0},
+            'results_metrics':
+            {
+                'trade_count': 1,
+                'avg_profit': 0.1,
+                'total_profit': 0.001,
+                'profit': 1.0,
+                'duration': 20.0
+            }
+        }])
     )
     patch_exchange(mocker)
 
@@ -936,7 +1066,17 @@ def test_simplified_interface_buy(mocker, default_conf, caplog, capsys) -> None:
 
     parallel = mocker.patch(
         'freqtrade.optimize.hyperopt.Hyperopt.run_optimizer_parallel',
-        MagicMock(return_value=[{'loss': 1, 'results_explanation': 'foo result', 'params': {}}])
+        MagicMock(return_value=[{
+            'loss': 1, 'results_explanation': 'foo result', 'params': {},
+            'results_metrics':
+            {
+                'trade_count': 1,
+                'avg_profit': 0.1,
+                'total_profit': 0.001,
+                'profit': 1.0,
+                'duration': 20.0
+            }
+        }])
     )
     patch_exchange(mocker)
 
@@ -983,7 +1123,17 @@ def test_simplified_interface_sell(mocker, default_conf, caplog, capsys) -> None
 
     parallel = mocker.patch(
         'freqtrade.optimize.hyperopt.Hyperopt.run_optimizer_parallel',
-        MagicMock(return_value=[{'loss': 1, 'results_explanation': 'foo result', 'params': {}}])
+        MagicMock(return_value=[{
+            'loss': 1, 'results_explanation': 'foo result', 'params': {},
+            'results_metrics':
+            {
+                'trade_count': 1,
+                'avg_profit': 0.1,
+                'total_profit': 0.001,
+                'profit': 1.0,
+                'duration': 20.0
+            }
+        }])
     )
     patch_exchange(mocker)
 

@@ -284,7 +284,7 @@ def test_status_table_handle(default_conf, update, ticker, fee, mocker) -> None:
     fields = re.sub('[ ]+', ' ', line[2].strip()).split(' ')
 
     assert int(fields[0]) == 1
-    assert fields[1] == 'ETH/BTC'
+    assert 'ETH/BTC' in fields[1]
     assert msg_mock.call_count == 1
 
 
@@ -720,13 +720,13 @@ def test_forcesell_handle(default_conf, update, ticker, fee,
         'exchange': 'Bittrex',
         'pair': 'ETH/BTC',
         'gain': 'profit',
-        'limit': 1.172e-05,
-        'amount': 90.99181073703367,
+        'limit': 1.173e-05,
+        'amount': 91.07468123861567,
         'order_type': 'limit',
-        'open_rate': 1.099e-05,
-        'current_rate': 1.172e-05,
-        'profit_amount': 6.126e-05,
-        'profit_percent': 0.0611052,
+        'open_rate': 1.098e-05,
+        'current_rate': 1.173e-05,
+        'profit_amount': 6.314e-05,
+        'profit_ratio': 0.0629778,
         'stake_currency': 'BTC',
         'fiat_currency': 'USD',
         'sell_reason': SellType.FORCE_SELL.value,
@@ -779,13 +779,13 @@ def test_forcesell_down_handle(default_conf, update, ticker, fee,
         'exchange': 'Bittrex',
         'pair': 'ETH/BTC',
         'gain': 'loss',
-        'limit': 1.044e-05,
-        'amount': 90.99181073703367,
+        'limit': 1.043e-05,
+        'amount': 91.07468123861567,
         'order_type': 'limit',
-        'open_rate': 1.099e-05,
-        'current_rate': 1.044e-05,
-        'profit_amount': -5.492e-05,
-        'profit_percent': -0.05478342,
+        'open_rate': 1.098e-05,
+        'current_rate': 1.043e-05,
+        'profit_amount': -5.497e-05,
+        'profit_ratio': -0.05482878,
         'stake_currency': 'BTC',
         'fiat_currency': 'USD',
         'sell_reason': SellType.FORCE_SELL.value,
@@ -827,13 +827,13 @@ def test_forcesell_all_handle(default_conf, update, ticker, fee, mocker) -> None
         'exchange': 'Bittrex',
         'pair': 'ETH/BTC',
         'gain': 'loss',
-        'limit': 1.098e-05,
-        'amount': 90.99181073703367,
+        'limit': 1.099e-05,
+        'amount': 91.07468123861567,
         'order_type': 'limit',
-        'open_rate': 1.099e-05,
-        'current_rate': 1.098e-05,
-        'profit_amount': -5.91e-06,
-        'profit_percent': -0.00589291,
+        'open_rate': 1.098e-05,
+        'current_rate': 1.099e-05,
+        'profit_amount': -4.09e-06,
+        'profit_ratio': -0.00408133,
         'stake_currency': 'BTC',
         'fiat_currency': 'USD',
         'sell_reason': SellType.FORCE_SELL.value,
@@ -1200,12 +1200,35 @@ def test_send_msg_buy_notification(default_conf, mocker) -> None:
         'stake_amount': 0.001,
         'stake_amount_fiat': 0.0,
         'stake_currency': 'BTC',
-        'fiat_currency': 'USD'
+        'fiat_currency': 'USD',
+        'current_rate': 1.099e-05,
+        'amount': 1333.3333333333335,
+        'open_date': arrow.utcnow().shift(hours=-1)
     })
     assert msg_mock.call_args[0][0] \
         == '*Bittrex:* Buying ETH/BTC\n' \
-           'at rate `0.00001099\n' \
-           '(0.001000 BTC,0.000 USD)`'
+           '*Amount:* `1333.33333333`\n' \
+           '*Open Rate:* `0.00001099`\n' \
+           '*Current Rate:* `0.00001099`\n' \
+           '*Total:* `(0.001000 BTC, 12.345 USD)`'
+
+
+def test_send_msg_buy_cancel_notification(default_conf, mocker) -> None:
+    msg_mock = MagicMock()
+    mocker.patch.multiple(
+        'freqtrade.rpc.telegram.Telegram',
+        _init=MagicMock(),
+        _send_msg=msg_mock
+    )
+    freqtradebot = get_patched_freqtradebot(mocker, default_conf)
+    telegram = Telegram(freqtradebot)
+    telegram.send_msg({
+        'type': RPCMessageType.BUY_CANCEL_NOTIFICATION,
+        'exchange': 'Bittrex',
+        'pair': 'ETH/BTC',
+    })
+    assert msg_mock.call_args[0][0] \
+        == ('*Bittrex:* Cancelling Open Buy Order for ETH/BTC')
 
 
 def test_send_msg_sell_notification(default_conf, mocker) -> None:
@@ -1230,7 +1253,7 @@ def test_send_msg_sell_notification(default_conf, mocker) -> None:
         'open_rate': 7.5e-05,
         'current_rate': 3.201e-05,
         'profit_amount': -0.05746268,
-        'profit_percent': -0.57405275,
+        'profit_ratio': -0.57405275,
         'stake_currency': 'ETH',
         'fiat_currency': 'USD',
         'sell_reason': SellType.STOP_LOSS.value,
@@ -1239,13 +1262,13 @@ def test_send_msg_sell_notification(default_conf, mocker) -> None:
     })
     assert msg_mock.call_args[0][0] \
         == ('*Binance:* Selling KEY/ETH\n'
-            '*Rate:* `0.00003201`\n'
             '*Amount:* `1333.33333333`\n'
             '*Open Rate:* `0.00007500`\n'
             '*Current Rate:* `0.00003201`\n'
+            '*Close Rate:* `0.00003201`\n'
             '*Sell Reason:* `stop_loss`\n'
             '*Duration:* `1:00:00 (60.0 min)`\n'
-            '*Profit:* `-57.41%`` (loss: -0.05746268 ETH`` / -24.812 USD)`')
+            '*Profit:* `-57.41%` `(loss: -0.05746268 ETH / -24.812 USD)`')
 
     msg_mock.reset_mock()
     telegram.send_msg({
@@ -1259,7 +1282,7 @@ def test_send_msg_sell_notification(default_conf, mocker) -> None:
         'open_rate': 7.5e-05,
         'current_rate': 3.201e-05,
         'profit_amount': -0.05746268,
-        'profit_percent': -0.57405275,
+        'profit_ratio': -0.57405275,
         'stake_currency': 'ETH',
         'sell_reason': SellType.STOP_LOSS.value,
         'open_date': arrow.utcnow().shift(days=-1, hours=-2, minutes=-30),
@@ -1267,13 +1290,44 @@ def test_send_msg_sell_notification(default_conf, mocker) -> None:
     })
     assert msg_mock.call_args[0][0] \
         == ('*Binance:* Selling KEY/ETH\n'
-            '*Rate:* `0.00003201`\n'
             '*Amount:* `1333.33333333`\n'
             '*Open Rate:* `0.00007500`\n'
             '*Current Rate:* `0.00003201`\n'
+            '*Close Rate:* `0.00003201`\n'
             '*Sell Reason:* `stop_loss`\n'
             '*Duration:* `1 day, 2:30:00 (1590.0 min)`\n'
             '*Profit:* `-57.41%`')
+    # Reset singleton function to avoid random breaks
+    telegram._fiat_converter.convert_amount = old_convamount
+
+
+def test_send_msg_sell_cancel_notification(default_conf, mocker) -> None:
+    msg_mock = MagicMock()
+    mocker.patch.multiple(
+        'freqtrade.rpc.telegram.Telegram',
+        _init=MagicMock(),
+        _send_msg=msg_mock
+    )
+    freqtradebot = get_patched_freqtradebot(mocker, default_conf)
+    telegram = Telegram(freqtradebot)
+    old_convamount = telegram._fiat_converter.convert_amount
+    telegram._fiat_converter.convert_amount = lambda a, b, c: -24.812
+    telegram.send_msg({
+        'type': RPCMessageType.SELL_CANCEL_NOTIFICATION,
+        'exchange': 'Binance',
+        'pair': 'KEY/ETH',
+    })
+    assert msg_mock.call_args[0][0] \
+        == ('*Binance:* Cancelling Open Sell Order for KEY/ETH')
+
+    msg_mock.reset_mock()
+    telegram.send_msg({
+        'type': RPCMessageType.SELL_CANCEL_NOTIFICATION,
+        'exchange': 'Binance',
+        'pair': 'KEY/ETH',
+    })
+    assert msg_mock.call_args[0][0] \
+        == ('*Binance:* Cancelling Open Sell Order for KEY/ETH')
     # Reset singleton function to avoid random breaks
     telegram._fiat_converter.convert_amount = old_convamount
 
@@ -1360,12 +1414,17 @@ def test_send_msg_buy_notification_no_fiat(default_conf, mocker) -> None:
         'stake_amount': 0.001,
         'stake_amount_fiat': 0.0,
         'stake_currency': 'BTC',
-        'fiat_currency': None
+        'fiat_currency': None,
+        'current_rate': 1.099e-05,
+        'amount': 1333.3333333333335,
+        'open_date': arrow.utcnow().shift(hours=-1)
     })
     assert msg_mock.call_args[0][0] \
         == '*Bittrex:* Buying ETH/BTC\n' \
-           'at rate `0.00001099\n' \
-           '(0.001000 BTC)`'
+           '*Amount:* `1333.33333333`\n' \
+           '*Open Rate:* `0.00001099`\n' \
+           '*Current Rate:* `0.00001099`\n' \
+           '*Total:* `(0.001000 BTC)`'
 
 
 def test_send_msg_sell_notification_no_fiat(default_conf, mocker) -> None:
@@ -1389,7 +1448,7 @@ def test_send_msg_sell_notification_no_fiat(default_conf, mocker) -> None:
         'open_rate': 7.5e-05,
         'current_rate': 3.201e-05,
         'profit_amount': -0.05746268,
-        'profit_percent': -0.57405275,
+        'profit_ratio': -0.57405275,
         'stake_currency': 'ETH',
         'fiat_currency': 'USD',
         'sell_reason': SellType.STOP_LOSS.value,
@@ -1398,10 +1457,10 @@ def test_send_msg_sell_notification_no_fiat(default_conf, mocker) -> None:
     })
     assert msg_mock.call_args[0][0] \
         == '*Binance:* Selling KEY/ETH\n' \
-           '*Rate:* `0.00003201`\n' \
            '*Amount:* `1333.33333333`\n' \
            '*Open Rate:* `0.00007500`\n' \
            '*Current Rate:* `0.00003201`\n' \
+           '*Close Rate:* `0.00003201`\n' \
            '*Sell Reason:* `stop_loss`\n' \
            '*Duration:* `2:35:03 (155.1 min)`\n' \
            '*Profit:* `-57.41%`'

@@ -35,8 +35,8 @@ class PrecisionFilter(IPairList):
         """
         stop_price = ticker['ask'] * stoploss
         # Adjust stop-prices to precision
-        sp = self._exchange.symbol_price_prec(ticker["symbol"], stop_price)
-        stop_gap_price = self._exchange.symbol_price_prec(ticker["symbol"], stop_price * 0.99)
+        sp = self._exchange.price_to_precision(ticker["symbol"], stop_price)
+        stop_gap_price = self._exchange.price_to_precision(ticker["symbol"], stop_price * 0.99)
         logger.debug(f"{ticker['symbol']} - {sp} : {stop_gap_price}")
         if sp <= stop_gap_price:
             logger.info(f"Removed {ticker['symbol']} from whitelist, "
@@ -48,10 +48,10 @@ class PrecisionFilter(IPairList):
         """
         Filters and sorts pairlists and assigns and returns them again.
         """
-        stoploss = None
-        if self._config.get('stoploss') is not None:
+        stoploss = self._config.get('stoploss')
+        if stoploss is not None:
             # Precalculate sanitized stoploss value to avoid recalculation for every pair
-            stoploss = 1 - abs(self._config.get('stoploss'))
+            stoploss = 1 - abs(stoploss)
         # Copy list since we're modifying this list
         for p in deepcopy(pairlist):
             ticker = tickers.get(p)

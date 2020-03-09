@@ -14,7 +14,7 @@ import pytest
 from telegram import Chat, Message, Update
 
 from freqtrade import constants, persistence
-from freqtrade.configuration import Arguments
+from freqtrade.commands import Arguments
 from freqtrade.data.converter import parse_ticker_dataframe
 from freqtrade.edge import Edge, PairInfo
 from freqtrade.exchange import Exchange
@@ -60,8 +60,10 @@ def patch_exchange(mocker, api_mock=None, id='bittrex', mock_markets=True) -> No
     mocker.patch('freqtrade.exchange.Exchange.validate_pairs', MagicMock())
     mocker.patch('freqtrade.exchange.Exchange.validate_timeframes', MagicMock())
     mocker.patch('freqtrade.exchange.Exchange.validate_ordertypes', MagicMock())
+    mocker.patch('freqtrade.exchange.Exchange.validate_stakecurrency', MagicMock())
     mocker.patch('freqtrade.exchange.Exchange.id', PropertyMock(return_value=id))
     mocker.patch('freqtrade.exchange.Exchange.name', PropertyMock(return_value=id.title()))
+    mocker.patch('freqtrade.exchange.Exchange.precisionMode', PropertyMock(return_value=2))
     if mock_markets:
         mocker.patch('freqtrade.exchange.Exchange.markets',
                      PropertyMock(return_value=get_markets()))
@@ -165,23 +167,23 @@ def patch_get_signal(freqtrade: FreqtradeBot, value=(True, False)) -> None:
 
 
 @pytest.fixture(autouse=True)
-def patch_coinmarketcap(mocker) -> None:
+def patch_coingekko(mocker) -> None:
     """
-    Mocker to coinmarketcap to speed up tests
-    :param mocker: mocker to patch coinmarketcap class
+    Mocker to coingekko to speed up tests
+    :param mocker: mocker to patch coingekko class
     :return: None
     """
 
-    tickermock = MagicMock(return_value={'price_usd': 12345.0})
-    listmock = MagicMock(return_value={'data': [{'id': 1, 'name': 'Bitcoin', 'symbol': 'BTC',
-                                                 'website_slug': 'bitcoin'},
-                                                {'id': 1027, 'name': 'Ethereum', 'symbol': 'ETH',
-                                                 'website_slug': 'ethereum'}
-                                                ]})
+    tickermock = MagicMock(return_value={'bitcoin': {'usd': 12345.0}, 'ethereum': {'usd': 12345.0}})
+    listmock = MagicMock(return_value=[{'id': 'bitcoin', 'name': 'Bitcoin', 'symbol': 'btc',
+                                        'website_slug': 'bitcoin'},
+                                       {'id': 'ethereum', 'name': 'Ethereum', 'symbol': 'eth',
+                                        'website_slug': 'ethereum'}
+                                       ])
     mocker.patch.multiple(
-        'freqtrade.rpc.fiat_convert.Market',
-        ticker=tickermock,
-        listings=listmock,
+        'freqtrade.rpc.fiat_convert.CoinGeckoAPI',
+        get_price=tickermock,
+        get_coins_list=listmock,
 
     )
 
@@ -255,6 +257,7 @@ def default_conf(testdatadir):
         "db_url": "sqlite://",
         "user_data_dir": Path("user_data"),
         "verbosity": 3,
+        "strategy_path": str(Path(__file__).parent / "strategy" / "strats"),
         "strategy": "DefaultStrategy"
     }
     return configuration
@@ -572,7 +575,34 @@ def get_markets():
                 }
             },
             'info': {},
-        }
+        },
+        'LTC/ETH': {
+            'id': 'LTCETH',
+            'symbol': 'LTC/ETH',
+            'base': 'LTC',
+            'quote': 'ETH',
+            'active': True,
+            'precision': {
+                'base': 8,
+                'quote': 8,
+                'amount': 3,
+                'price': 5
+            },
+            'limits': {
+                'amount': {
+                    'min': 0.001,
+                    'max': 10000000.0
+                },
+                'price': {
+                    'min': 1e-05,
+                    'max': 1000.0
+                },
+                'cost': {
+                    'min': 0.01,
+                    'max': None
+                }
+            },
+        },
     }
 
 
@@ -637,6 +667,31 @@ def shitcoinmarkets(markets):
                 }
             },
             'info': {},
+        },
+        'NANO/USDT': {
+            "percentage": True,
+            "tierBased": False,
+            "taker": 0.001,
+            "maker": 0.001,
+            "precision": {
+                "base": 8,
+                "quote": 8,
+                "amount": 2,
+                "price": 4
+            },
+            "limits": {
+            },
+            "id": "NANOUSDT",
+            "symbol": "NANO/USDT",
+            "base": "NANO",
+            "quote": "USDT",
+            "baseId": "NANO",
+            "quoteId": "USDT",
+            "info": {},
+            "type": "spot",
+            "spot": True,
+            "future": False,
+            "active": True
         },
         })
     return shitmarkets
@@ -1112,6 +1167,28 @@ def tickers():
             'quoteVolume': 1154.19266394,
             'info': {}
         },
+        "NANO/USDT": {
+            "symbol": "NANO/USDT",
+            "timestamp": 1580469388244,
+            "datetime": "2020-01-31T11:16:28.244Z",
+            "high": 0.7519,
+            "low": 0.7154,
+            "bid": 0.7305,
+            "bidVolume": 300.3,
+            "ask": 0.7342,
+            "askVolume": 15.14,
+            "vwap": 0.73645591,
+            "open": 0.7154,
+            "close": 0.7342,
+            "last": 0.7342,
+            "previousClose": 0.7189,
+            "change": 0.0188,
+            "percentage": 2.628,
+            "average": None,
+            "baseVolume": 439472.44,
+            "quoteVolume": 323652.075405,
+            "info": {}
+        },
     })
 
 
@@ -1317,12 +1394,12 @@ def buy_order_fee():
 def edge_conf(default_conf):
     conf = deepcopy(default_conf)
     conf['max_open_trades'] = -1
+    conf['tradable_balance_ratio'] = 0.5
     conf['stake_amount'] = constants.UNLIMITED_STAKE_AMOUNT
     conf['edge'] = {
         "enabled": True,
         "process_throttle_secs": 1800,
         "calculate_since_number_of_days": 14,
-        "capital_available_percentage": 0.5,
         "allowed_risk": 0.01,
         "stoploss_range_min": -0.01,
         "stoploss_range_max": -0.1,

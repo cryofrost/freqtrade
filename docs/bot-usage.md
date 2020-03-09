@@ -58,9 +58,10 @@ Common arguments:
                         details.
   -V, --version         show program's version number and exit
   -c PATH, --config PATH
-                        Specify configuration file (default: `config.json`).
-                        Multiple --config options may be used. Can be set to
-                        `-` to read config from stdin.
+                        Specify configuration file (default:
+                        `userdir/config.json` or `config.json` whichever
+                        exists). Multiple --config options may be used. Can be
+                        set to `-` to read config from stdin.
   -d PATH, --datadir PATH
                         Path to directory with historical backtesting data.
   --userdir PATH, --user-data-dir PATH
@@ -71,6 +72,7 @@ Strategy arguments:
                         Specify strategy class name which will be used by the
                         bot.
   --strategy-path PATH  Specify additional strategy lookup path.
+.
 
 ```
 
@@ -242,12 +244,15 @@ optional arguments:
 
 Common arguments:
   -v, --verbose         Verbose mode (-vv for more, -vvv to get all messages).
-  --logfile FILE        Log to the file specified.
+  --logfile FILE        Log to the file specified. Special values are:
+                        'syslog', 'journald'. See the documentation for more
+                        details.
   -V, --version         show program's version number and exit
   -c PATH, --config PATH
-                        Specify configuration file (default: `config.json`).
-                        Multiple --config options may be used. Can be set to
-                        `-` to read config from stdin.
+                        Specify configuration file (default:
+                        `userdir/config.json` or `config.json` whichever
+                        exists). Multiple --config options may be used. Can be
+                        set to `-` to read config from stdin.
   -d PATH, --datadir PATH
                         Path to directory with historical backtesting data.
   --userdir PATH, --user-data-dir PATH
@@ -270,7 +275,7 @@ Check the corresponding [Data Downloading](data-download.md) section for more de
 ## Hyperopt commands
 
 To optimize your strategy, you can use hyperopt parameter hyperoptimization
-to find optimal parameter values for your stategy.
+to find optimal parameter values for your strategy.
 
 ```
 usage: freqtrade hyperopt [-h] [-v] [--logfile FILE] [-V] [-c PATH] [-d PATH]
@@ -280,7 +285,7 @@ usage: freqtrade hyperopt [-h] [-v] [--logfile FILE] [-V] [-c PATH] [-d PATH]
                           [--stake-amount STAKE_AMOUNT] [--fee FLOAT]
                           [--hyperopt NAME] [--hyperopt-path PATH] [--eps]
                           [-e INT]
-                          [--spaces {all,buy,sell,roi,stoploss} [{all,buy,sell,roi,stoploss} ...]]
+                          [--spaces {all,buy,sell,roi,stoploss,trailing,default} [{all,buy,sell,roi,stoploss,trailing,default} ...]]
                           [--dmmp] [--print-all] [--no-color] [--print-json]
                           [-j JOBS] [--random-state INT] [--min-trades INT]
                           [--continue] [--hyperopt-loss NAME]
@@ -308,9 +313,9 @@ optional arguments:
                         Allow buying the same pair multiple times (position
                         stacking).
   -e INT, --epochs INT  Specify number of epochs (default: 100).
-  --spaces {all,buy,sell,roi,stoploss} [{all,buy,sell,roi,stoploss} ...]
+  --spaces {all,buy,sell,roi,stoploss,trailing,default} [{all,buy,sell,roi,stoploss,trailing,default} ...]
                         Specify which parameters to hyperopt. Space-separated
-                        list. Default: `all`.
+                        list.
   --dmmp, --disable-max-market-positions
                         Disable applying `max_open_trades` during backtest
                         (same as setting `max_open_trades` to a very high
@@ -318,7 +323,7 @@ optional arguments:
   --print-all           Print all results, not only the best ones.
   --no-color            Disable colorization of hyperopt results. May be
                         useful if you are redirecting output to a file.
-  --print-json          Print best result detailization in JSON format.
+  --print-json          Print best results in JSON format.
   -j JOBS, --job-workers JOBS
                         The number of concurrently running jobs for
                         hyperoptimization (hyperopt worker processes). If -1
@@ -336,18 +341,23 @@ optional arguments:
                         class (IHyperOptLoss). Different functions can
                         generate completely different results, since the
                         target for optimization is different. Built-in
-                        Hyperopt-loss-functions are: DefaultHyperOptLoss,
-                        OnlyProfitHyperOptLoss, SharpeHyperOptLoss (default:
-                        `DefaultHyperOptLoss`).
+                        Hyperopt-loss-functions are:
+                        DefaultHyperOptLoss, OnlyProfitHyperOptLoss,
+                        SharpeHyperOptLoss, SharpeHyperOptLossDaily,
+                        SortinoHyperOptLoss, SortinoHyperOptLossDaily.
+                        (default: `DefaultHyperOptLoss`).
 
 Common arguments:
   -v, --verbose         Verbose mode (-vv for more, -vvv to get all messages).
-  --logfile FILE        Log to the file specified.
+  --logfile FILE        Log to the file specified. Special values are:
+                        'syslog', 'journald'. See the documentation for more
+                        details.
   -V, --version         show program's version number and exit
   -c PATH, --config PATH
-                        Specify configuration file (default: `config.json`).
-                        Multiple --config options may be used. Can be set to
-                        `-` to read config from stdin.
+                        Specify configuration file (default:
+                        `userdir/config.json` or `config.json` whichever
+                        exists). Multiple --config options may be used. Can be
+                        set to `-` to read config from stdin.
   -d PATH, --datadir PATH
                         Path to directory with historical backtesting data.
   --userdir PATH, --user-data-dir PATH
@@ -358,6 +368,7 @@ Strategy arguments:
                         Specify strategy class name which will be used by the
                         bot.
   --strategy-path PATH  Specify additional strategy lookup path.
+
 ```
 
 ## Edge commands
@@ -394,12 +405,15 @@ optional arguments:
 
 Common arguments:
   -v, --verbose         Verbose mode (-vv for more, -vvv to get all messages).
-  --logfile FILE        Log to the file specified.
+  --logfile FILE        Log to the file specified. Special values are:
+                        'syslog', 'journald'. See the documentation for more
+                        details.
   -V, --version         show program's version number and exit
   -c PATH, --config PATH
-                        Specify configuration file (default: `config.json`).
-                        Multiple --config options may be used. Can be set to
-                        `-` to read config from stdin.
+                        Specify configuration file (default:
+                        `userdir/config.json` or `config.json` whichever
+                        exists). Multiple --config options may be used. Can be
+                        set to `-` to read config from stdin.
   -d PATH, --datadir PATH
                         Path to directory with historical backtesting data.
   --userdir PATH, --user-data-dir PATH
@@ -410,6 +424,7 @@ Strategy arguments:
                         Specify strategy class name which will be used by the
                         bot.
   --strategy-path PATH  Specify additional strategy lookup path.
+
 ```
 
 To understand edge and how to read the results, please read the [edge documentation](edge.md).

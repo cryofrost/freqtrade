@@ -10,7 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 from jsonschema import ValidationError
 
-from freqtrade.configuration import (Arguments, Configuration, check_exchange,
+from freqtrade.commands import Arguments
+from freqtrade.configuration import (Configuration, check_exchange,
                                      remove_credentials,
                                      validate_config_consistency)
 from freqtrade.configuration.config_validation import validate_config_schema
@@ -33,13 +34,6 @@ def all_conf():
     return conf
 
 
-def test_load_config_invalid_pair(default_conf) -> None:
-    default_conf['exchange']['pair_whitelist'].append('ETH-BTC')
-
-    with pytest.raises(ValidationError, match=r'.*does not match.*'):
-        validate_config_schema(default_conf)
-
-
 def test_load_config_missing_attributes(default_conf) -> None:
     conf = deepcopy(default_conf)
     conf.pop('exchange')
@@ -49,6 +43,7 @@ def test_load_config_missing_attributes(default_conf) -> None:
 
     conf = deepcopy(default_conf)
     conf.pop('stake_currency')
+    conf['runmode'] = RunMode.DRY_RUN
     with pytest.raises(ValidationError, match=r".*'stake_currency' is a required property.*"):
         validate_config_schema(conf)
 
@@ -210,6 +205,7 @@ def test_load_config_file_exception(mocker) -> None:
 
 
 def test_load_config(default_conf, mocker) -> None:
+    del default_conf['strategy_path']
     patched_configuration_load_config_file(mocker, default_conf)
 
     args = Arguments(['trade']).get_parsed_arg()
@@ -322,7 +318,8 @@ def test_load_dry_run(default_conf, mocker, config_value, expected, arglist) -> 
     configuration = Configuration(Arguments(arglist).get_parsed_arg())
     validated_conf = configuration.load_config()
 
-    assert validated_conf.get('dry_run') is expected
+    assert validated_conf['dry_run'] is expected
+    assert validated_conf['runmode'] == (RunMode.DRY_RUN if expected else RunMode.LIVE)
 
 
 def test_load_custom_strategy(default_conf, mocker) -> None:
@@ -722,6 +719,14 @@ def test_validate_default_conf(default_conf) -> None:
     validate_config_schema(default_conf)
 
 
+def test_validate_max_open_trades(default_conf):
+    default_conf['max_open_trades'] = float('inf')
+    default_conf['stake_amount'] = 'unlimited'
+    with pytest.raises(OperationalException, match='`max_open_trades` and `stake_amount` '
+                                                   'cannot both be unlimited.'):
+        validate_config_consistency(default_conf)
+
+
 def test_validate_tsl(default_conf):
     default_conf['stoploss'] = 0.0
     with pytest.raises(OperationalException, match='The config stoploss needs to be different '
@@ -798,12 +803,6 @@ def test_validate_whitelist(default_conf):
     del conf['exchange']['pair_whitelist']
 
     validate_config_consistency(conf)
-
-    conf = deepcopy(default_conf)
-    conf['stake_currency'] = 'USDT'
-    with pytest.raises(OperationalException,
-                       match=r"Stake-currency 'USDT' not compatible with pair-whitelist.*"):
-        validate_config_consistency(conf)
 
 
 def test_load_config_test_comments() -> None:
@@ -1026,6 +1025,17 @@ def test_process_deprecated_setting_pairlists(mocker, default_conf, caplog):
     process_temporary_deprecated_settings(default_conf)
     assert log_has_re(r'DEPRECATED.*precision_filter.*', caplog)
     assert log_has_re(r'DEPRECATED.*in pairlist is deprecated and must be moved*', caplog)
+
+
+def test_process_deprecated_setting_edge(mocker, edge_conf, caplog):
+    patched_configuration_load_config_file(mocker, edge_conf)
+    edge_conf.update({'edge': {
+        'enabled': True,
+        'capital_available_percentage': 0.5,
+    }})
+
+    process_temporary_deprecated_settings(edge_conf)
+    assert log_has_re(r"DEPRECATED.*Using 'edge.capital_available_percentage'*", caplog)
 
 
 def test_check_conflicting_settings(mocker, default_conf, caplog):
