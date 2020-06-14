@@ -6,8 +6,12 @@ logfile.txt
 !user_data/strategy/sample_strategy.py
 !user_data/strategy/ml_strategy.py
 !user_data/notebooks
+<<<<<<< HEAD
 #user_data/notebooks/*
 !user_data/notebooks/*example.ipynb
+=======
+user_data/notebooks/*
+>>>>>>> f80b5f9410e332e458c597269880b5e714727295
 freqtrade-plot.html
 freqtrade-profit-plot.html
 

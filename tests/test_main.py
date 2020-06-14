@@ -115,12 +115,38 @@ def test_main_operational_exception(mocker, default_conf, caplog) -> None:
     assert log_has('Oh snap!', caplog)
 
 
-def test_main_reload_conf(mocker, default_conf, caplog) -> None:
+def test_main_operational_exception1(mocker, default_conf, caplog) -> None:
+    patch_exchange(mocker)
+    mocker.patch(
+        'freqtrade.commands.list_commands.available_exchanges',
+        MagicMock(side_effect=ValueError('Oh snap!'))
+    )
+    patched_configuration_load_config_file(mocker, default_conf)
+
+    args = ['list-exchanges']
+
+    # Test Main + the KeyboardInterrupt exception
+    with pytest.raises(SystemExit):
+        main(args)
+
+    assert log_has('Fatal exception!', caplog)
+    assert not log_has_re(r'SIGINT.*', caplog)
+    mocker.patch(
+        'freqtrade.commands.list_commands.available_exchanges',
+        MagicMock(side_effect=KeyboardInterrupt)
+    )
+    with pytest.raises(SystemExit):
+        main(args)
+
+    assert log_has_re(r'SIGINT.*', caplog)
+
+
+def test_main_reload_config(mocker, default_conf, caplog) -> None:
     patch_exchange(mocker)
     mocker.patch('freqtrade.freqtradebot.FreqtradeBot.cleanup', MagicMock())
     # Simulate Running, reload, running workflow
     worker_mock = MagicMock(side_effect=[State.RUNNING,
-                                         State.RELOAD_CONF,
+                                         State.RELOAD_CONFIG,
                                          State.RUNNING,
                                          OperationalException("Oh snap!")])
     mocker.patch('freqtrade.worker.Worker._worker', worker_mock)
